@@ -36,7 +36,8 @@ MAX_CONSECUTIVE_FAILURES = 3
 VLLM_STARTUP_TIMEOUT = 300
 RESULTS_FILE = "results.tsv"
 ROLLOUT_FILE = "rollouts/rollouts.jsonl"
-TRAIN_PY = "autoresearch/train.py"
+AUTORESEARCH_DIR = "autoresearch"
+TRAIN_PY = "train.py"  # relative to AUTORESEARCH_DIR
 HISTORY_TAIL = 20
 
 # ---------------------------------------------------------------------------
@@ -141,8 +142,8 @@ Output your reasoning, then a single unified diff (git patch) that can be applie
 Format your diff inside a fenced code block:
 
 ```diff
---- a/autoresearch/train.py
-+++ b/autoresearch/train.py
+--- a/train.py
++++ b/train.py
 @@ ... @@
  context line
 -old line
@@ -193,13 +194,16 @@ def apply_patch(diff_text: str) -> tuple[bool, str]:
         f.write(diff_text)
         patch_path = f.name
     try:
-        r = subprocess.run(["git", "apply", "--check", patch_path], capture_output=True, text=True, timeout=10)
+        r = subprocess.run(["git", "apply", "--check", patch_path],
+                           capture_output=True, text=True, cwd=AUTORESEARCH_DIR, timeout=10)
         if r.returncode == 0:
-            r = subprocess.run(["git", "apply", patch_path], capture_output=True, text=True, timeout=10)
+            r = subprocess.run(["git", "apply", patch_path],
+                               capture_output=True, text=True, cwd=AUTORESEARCH_DIR, timeout=10)
             if r.returncode == 0:
                 return True, ""
             return False, r.stderr.strip()
-        r = subprocess.run(["git", "apply", "--3way", patch_path], capture_output=True, text=True, timeout=10)
+        r = subprocess.run(["git", "apply", "--3way", patch_path],
+                           capture_output=True, text=True, cwd=AUTORESEARCH_DIR, timeout=10)
         if r.returncode == 0:
             return True, ""
         return False, r.stderr.strip()
@@ -208,7 +212,7 @@ def apply_patch(diff_text: str) -> tuple[bool, str]:
 
 
 def revert_train_py():
-    subprocess.run(["git", "checkout", "--", TRAIN_PY], check=True, timeout=10)
+    subprocess.run(["git", "checkout", "--", TRAIN_PY], cwd=AUTORESEARCH_DIR, check=True, timeout=10)
 
 
 # ---------------------------------------------------------------------------
@@ -308,7 +312,7 @@ def main():
     init_results_file()
     start_vllm_server()
 
-    baseline = Path(TRAIN_PY).read_text()
+    baseline = Path(AUTORESEARCH_DIR, TRAIN_PY).read_text()
     iteration = 0
     consecutive_failures = 0
     best_val_bpb = float("inf")
