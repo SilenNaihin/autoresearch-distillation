@@ -99,6 +99,8 @@ with ThreadPoolExecutor(max_workers=6) as executor:
 
 **Important**: `env.step()` modifies shared state (`best_val_bpb`, `iteration`, log files). If you run parallel experiments, wrap state access or use one environment per thread. The runner itself is safe — the environment state tracking isn't locked.
 
+**Cross-process safety**: `GPUPoolRunner` uses `fcntl.flock` file locks (not in-process `Queue`) so multiple Ray workers can share the GPU pool without collisions. Lock files live in `/data/tmp/gpu_locks/`.
+
 ## VERL integration
 
 `AutoresearchAgentLoop` in `agent_loop.py` extends VERL's `ToolAgentLoop` for multi-turn bash editing:
@@ -107,7 +109,38 @@ with ThreadPoolExecutor(max_workers=6) as executor:
 2. VERL's state machine handles: PENDING → GENERATING → PROCESSING_TOOLS → ... → TERMINATED
 3. Tool response tokens are masked (`response_mask=0`) — only the model's bash commands are trained on
 4. After submission, modified `train.py` is dispatched to `GPUPoolRunner`
-5. `compute_reward()` returns the scalar for RL
+5. `compute_reward()` returns `(reward, feedback)` — both flow into SDPO
+
+### SDPO self-distillation feedback
+
+The feedback pipeline connects experiment outcomes to the SDPO teacher prompt:
+
+```python
+# agent_loop.py — _dispatch_experiment returns (reward, feedback)
+reward, feedback = await self._dispatch_experiment(bash_tool, instance_id)
+output.reward_score = reward
+output.extra_fields["reward_extra_info"] = {"feedback": feedback}
+
+# VERL _postprocess() extracts reward_extra_info keys into non_tensor_batch
+# ray_trainer.py _collect_feedback() reads non_tensor_batch["feedback"]
+# _build_teacher_message() includes feedback in the SDPO teacher prompt
+```
+
+Key config settings in `autoresearch_sdpo.yaml`:
+
+```yaml
+self_distillation:
+  include_environment_feedback: True                # Enable feedback in teacher prompt
+  environment_feedback_only_without_solution: False  # Always include (not just when no solution)
+  success_reward_threshold: 0.5                      # Rollouts above this are "successful"
+  dont_reprompt_on_self_success: True                # Don't reprompt already-successful rollouts
+```
+
+With `environment_feedback_only_without_solution: False`, the teacher prompt includes **both** a solution (from a sibling rollout that succeeded) **and** environment feedback (val_bpb result, crash info, etc.). This gives the model richer signal than either alone.
+
+### Cross-process GPU locking
+
+`GPUPoolRunner` uses `fcntl.flock` file-based locks in `/data/tmp/gpu_locks/` for cross-process safety. Each Ray worker (separate process) can safely acquire GPU slots without collisions. The lock file per slot is `{slot_name}.lock`.
 
 Config: `configs/autoresearch_sdpo.yaml` (multi-turn enabled with `configs/bash_tool_config.yaml`)
 

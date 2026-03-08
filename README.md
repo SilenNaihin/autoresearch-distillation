@@ -129,9 +129,10 @@ bash scripts/run_training.sh
 - **Training GPUs**: 2 (colocated vLLM + FSDP2)
 - **Experiment GPUs**: 6 (remote, via SSH)
 - **Rollouts per batch**: 8
-- **Max response length**: 32768 tokens
+- **Max response length**: 8192 tokens
 - **Learning rate**: 1e-5
 - **Epochs**: 30
+- **Self-distillation**: Environment feedback always included in teacher prompt (not just when no solution exists)
 
 ### Using the environment directly
 
@@ -148,6 +149,41 @@ result.feedback                       # text feedback
 ```
 
 See [INTEGRATION.md](INTEGRATION.md) for the full API.
+
+## Observability
+
+### Wandb metrics to watch
+
+- **`feedback_available_fraction`** — Fraction of rollouts with environment feedback. Should be ~1.0. If 0.0, feedback isn't flowing from `agent_loop.py` through the VERL pipeline.
+- **`success_sample_fraction`** — Fraction of rollouts that beat `success_reward_threshold`. High values (>0.8) mean most rollouts succeed — the model is learning.
+- **`self_distillation_loss`** — KL loss toward the teacher distribution. Should be > 0 when self-distillation is active.
+- **`pg_loss`** — Policy gradient loss. Should be > 0 during training.
+- **`critic/score/mean`** — Average reward. Should be bounded (not inf/nan). If inf, check `compute_reward()` edge cases.
+
+### Feedback pipeline
+
+Environment feedback from experiment runs flows through:
+
+```
+SSHRunner (box1/2/4/5) → RunOutput(stdout, stderr, returncode)
+  → _dispatch_experiment() → (reward, feedback_string)
+    → output.extra_fields["reward_extra_info"]["feedback"]
+      → VERL _postprocess() → non_tensor_batch["feedback"]
+        → reward_extra_keys → reward_extra_infos_dict
+          → _collect_feedback() → _build_teacher_message()
+            → SDPO teacher prompt includes feedback
+```
+
+Every failure mode produces a feedback string:
+- **SSH failure**: connection error or timeout message
+- **Experiment crash** (exit != 0): SSH stderr + last 1000 chars of stdout
+- **OOM/segfault**: signal info + partial training output
+- **No val_bpb** (exit 0 but missing metric): last 20 lines of stdout
+- **Success**: `compute_reward()` feedback with val_bpb delta
+
+### Rollout dumps
+
+Set `trainer.rollout_data_dir` in config. Each training step dumps a JSONL with inputs, outputs, scores, and feedback — useful for debugging what the model is generating.
 
 ## Prerequisites
 
