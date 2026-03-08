@@ -226,9 +226,10 @@ def revert_train_py():
 def run_experiment() -> tuple[str, str, int]:
     env = os.environ.copy()
     env["CUDA_VISIBLE_DEVICES"] = EXPERIMENT_GPU
+    env["PATH"] = os.path.expanduser("~/.local/bin") + ":" + env.get("PATH", "")
     try:
         r = subprocess.run(["uv", "run", "train.py"], capture_output=True, text=True,
-                           env=env, cwd="autoresearch", timeout=EXPERIMENT_TIMEOUT)
+                           env=env, cwd=AUTORESEARCH_DIR, timeout=EXPERIMENT_TIMEOUT)
         return r.stdout, r.stderr, r.returncode
     except subprocess.TimeoutExpired:
         return "", f"TIMEOUT: exceeded {EXPERIMENT_TIMEOUT}s", -1
