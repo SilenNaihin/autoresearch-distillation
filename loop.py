@@ -1,10 +1,10 @@
 """
-Self-distillation loop: Qwen3 4B proposes patches to train.py, we run them, collect rollouts.
+Self-distillation loop: Qwen3 proposes edits to train.py, we run them, collect rollouts.
 
 Each iteration is independent:
   1. Read baseline train.py + results history
-  2. Model outputs a unified diff (git patch)
-  3. Apply patch, run experiment on GPU 1, parse results
+  2. Model outputs SEARCH/REPLACE blocks
+  3. Apply edits, run experiment on GPU 1, parse results
   4. Revert train.py to baseline
   5. Log results + save rollout for later SFT/DPO training
 
@@ -15,7 +15,6 @@ import json
 import os
 import re
 import subprocess
-import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -143,21 +142,22 @@ Propose a modification to train.py that will lower val_bpb (bits per byte on val
 - The script runs on a single GPU via: uv run train.py
 
 ## Output format
-Output your reasoning, then a single unified diff (git patch) that can be applied with `git apply`. The diff must modify only train.py.
+Output your reasoning, then one or more SEARCH/REPLACE blocks to edit train.py.
 
-Format your diff inside a fenced code block:
+Each block must use this exact format:
 
-```diff
---- a/train.py
-+++ b/train.py
-@@ ... @@
- context line
--old line
-+new line
- context line
-```
+<<<<<<< SEARCH
+exact lines from the current file to find
+=======
+replacement lines
+>>>>>>> REPLACE
 
-Output exactly one diff block. Do not output multiple separate diffs.\
+Rules for SEARCH/REPLACE blocks:
+- The SEARCH section must match EXACTLY in the current file (including whitespace and indentation).
+- Keep SEARCH blocks short — include only the lines you need to change plus enough context for a unique match.
+- You can use multiple SEARCH/REPLACE blocks for changes in different parts of the file.
+- To add new code, use a SEARCH block that matches existing lines where you want to insert, and include those lines plus your new code in REPLACE.
+- To delete code, use an empty REPLACE section.\
 """
 
 
@@ -176,45 +176,40 @@ def build_user_message(train_py_content: str, history_lines: list[str]) -> str:
 
     parts.append(
         "Propose a single modification to train.py that you think will lower val_bpb. "
-        "Output your reasoning followed by a unified diff."
+        "Output your reasoning followed by SEARCH/REPLACE blocks."
     )
     return "\n\n".join(parts)
 
 
 # ---------------------------------------------------------------------------
-# Diff parsing and application
+# SEARCH/REPLACE parsing and application
 # ---------------------------------------------------------------------------
 
-def extract_diff(response: str) -> str | None:
-    m = re.search(r"```diff\n(.*?)```", response, re.DOTALL)
-    if m:
-        return m.group(1).strip() + "\n"
-    m = re.search(r"(--- a/.*?\n\+\+\+ b/.*?\n@@.*?)(?:\n```|$)", response, re.DOTALL)
-    if m:
-        return m.group(1).strip() + "\n"
-    return None
+def parse_search_replace_blocks(response: str) -> list[tuple[str, str]]:
+    """Extract (search, replace) pairs from model response."""
+    blocks = []
+    pattern = r"<<<<<<< SEARCH\n(.*?)\n=======\n(.*?)\n>>>>>>> REPLACE"
+    for m in re.finditer(pattern, response, re.DOTALL):
+        blocks.append((m.group(1), m.group(2)))
+    return blocks
 
 
-def apply_patch(diff_text: str) -> tuple[bool, str]:
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".patch", delete=False) as f:
-        f.write(diff_text)
-        patch_path = f.name
-    try:
-        r = subprocess.run(["git", "apply", "--check", patch_path],
-                           capture_output=True, text=True, cwd=AUTORESEARCH_DIR, timeout=10)
-        if r.returncode == 0:
-            r = subprocess.run(["git", "apply", patch_path],
-                               capture_output=True, text=True, cwd=AUTORESEARCH_DIR, timeout=10)
-            if r.returncode == 0:
-                return True, ""
-            return False, r.stderr.strip()
-        r = subprocess.run(["git", "apply", "--3way", patch_path],
-                           capture_output=True, text=True, cwd=AUTORESEARCH_DIR, timeout=10)
-        if r.returncode == 0:
-            return True, ""
-        return False, r.stderr.strip()
-    finally:
-        os.unlink(patch_path)
+def apply_edits(content: str, blocks: list[tuple[str, str]]) -> tuple[str, bool, str]:
+    """Apply search/replace blocks sequentially. Returns (new_content, success, error)."""
+    for search, replace in blocks:
+        if search not in content:
+            # Try with normalized whitespace (strip trailing spaces per line)
+            search_norm = "\n".join(line.rstrip() for line in search.splitlines())
+            content_norm = "\n".join(line.rstrip() for line in content.splitlines())
+            if search_norm in content_norm:
+                # Find position in normalized, apply to original
+                idx = content_norm.index(search_norm)
+                end = idx + len(search_norm)
+                content = content[:idx] + replace + content[end:]
+                continue
+            return content, False, f"SEARCH block not found in file: {search[:80]}..."
+        content = content.replace(search, replace, 1)
+    return content, True, ""
 
 
 def revert_train_py():
@@ -302,7 +297,7 @@ def save_rollout(system: str, user: str, assistant: str, feedback: str, metadata
 def extract_description(response: str, max_len: int = 80) -> str:
     for line in response.splitlines():
         line = line.strip()
-        if not line or line.startswith(("```", "---", "+++", "@@", "-", "+")):
+        if not line or line.startswith(("```", "<<<", "===", ">>>")):
             continue
         line = re.sub(r"^#+\s*", "", line)
         if len(line) > 10:
@@ -353,34 +348,37 @@ def main():
 
             print(f"[loop] Response: {len(response)} chars")
 
-            # Extract diff
-            diff_text = extract_diff(response)
-            if diff_text is None:
-                print("[loop] No diff found in response")
-                log_result(iteration, 0.0, 0.0, "parse_error", "no diff in response")
+            # Parse SEARCH/REPLACE blocks
+            blocks = parse_search_replace_blocks(response)
+            if not blocks:
+                print("[loop] No SEARCH/REPLACE blocks found")
+                log_result(iteration, 0.0, 0.0, "parse_error", "no edit blocks in response")
                 save_rollout(system, user_msg, response,
-                             "ERROR: No unified diff found. Output a ```diff ... ``` block.",
+                             "ERROR: No SEARCH/REPLACE blocks found. Use <<<<<<< SEARCH / ======= / >>>>>>> REPLACE format.",
                              {"status": "parse_error", "iteration": iteration})
                 consecutive_failures += 1
                 if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
                     consecutive_failures = 0
                 continue
 
-            # Apply patch
-            success, error = apply_patch(diff_text)
+            # Apply edits
+            train_path = os.path.join(AUTORESEARCH_DIR, TRAIN_PY)
+            content = Path(train_path).read_text()
+            new_content, success, error = apply_edits(content, blocks)
             if not success:
-                print(f"[loop] Patch failed: {error}")
+                print(f"[loop] Edit failed: {error}")
                 revert_train_py()
-                log_result(iteration, 0.0, 0.0, "patch_error", f"patch failed: {error[:60]}")
-                save_rollout(system, user_msg, response, f"ERROR: Patch failed: {error}",
-                             {"status": "patch_error", "iteration": iteration})
+                log_result(iteration, 0.0, 0.0, "edit_error", f"edit failed: {error[:60]}")
+                save_rollout(system, user_msg, response, f"ERROR: Edit failed: {error}",
+                             {"status": "edit_error", "iteration": iteration})
                 consecutive_failures += 1
                 if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
                     consecutive_failures = 0
                 continue
 
+            Path(train_path).write_text(new_content)
             description = extract_description(response)
-            print(f"[loop] Running experiment: {description}")
+            print(f"[loop] Edits applied ({len(blocks)} blocks). Running experiment: {description}")
 
             # Run experiment
             stdout, stderr, returncode = run_experiment()
