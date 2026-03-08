@@ -114,7 +114,11 @@ def call_vllm(system: str, user: str) -> str:
         "temperature": TEMPERATURE,
     }).encode()
     req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
-    resp = urllib.request.urlopen(req, timeout=120)
+    try:
+        resp = urllib.request.urlopen(req, timeout=120)
+    except urllib.error.HTTPError as e:
+        body = e.read().decode(errors="replace")
+        raise RuntimeError(f"HTTP {e.code}: {body[:500]}") from e
     return json.loads(resp.read())["choices"][0]["message"]["content"]
 
 
