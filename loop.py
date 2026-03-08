@@ -29,7 +29,7 @@ VLLM_MODEL = "Qwen/Qwen3-4B"
 VLLM_PORT = 8000
 INFERENCE_GPU = "0"
 EXPERIMENT_GPU = "1"
-MAX_TOKENS = 16384
+MAX_TOKENS = 32768
 TEMPERATURE = 0.7
 EXPERIMENT_TIMEOUT = 600
 MAX_CONSECUTIVE_FAILURES = 3
@@ -57,7 +57,7 @@ def start_vllm_server():
     cmd += [
         "serve", VLLM_MODEL,
         "--port", str(VLLM_PORT),
-        "--max-model-len", "32768",
+        "--max-model-len", "65536",
         "--dtype", "bfloat16",
         "--gpu-memory-utilization", "0.9",
     ]
