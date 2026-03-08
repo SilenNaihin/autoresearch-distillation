@@ -37,6 +37,8 @@ actor_rollout_ref:
       distillation_topk: 100
       success_reward_threshold: 0.5
       dont_reprompt_on_self_success: True
+      include_environment_feedback: True
+      environment_feedback_only_without_solution: False
     optim:
       lr: 1e-5
   rollout:

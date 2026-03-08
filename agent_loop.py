@@ -92,8 +92,9 @@ class AutoresearchAgentLoop(ToolAgentLoop):
             output = await super().run(sampling_params, **kwargs)
 
             # Post-submission: dispatch experiment to GPU fleet
-            reward = await self._dispatch_experiment(bash_tool, instance_id)
+            reward, feedback = await self._dispatch_experiment(bash_tool, instance_id)
             output.reward_score = reward
+            output.extra_fields["reward_extra_info"] = {"feedback": feedback}
 
             return output
         finally:
@@ -137,15 +138,19 @@ class AutoresearchAgentLoop(ToolAgentLoop):
             # For any other tool, use default create/execute/release per call
             return await super()._call_tool(tool_call, tools_kwargs, agent_data)
 
-    async def _dispatch_experiment(self, bash_tool, instance_id: str | None) -> float:
-        """Read modified train.py, dispatch to GPU fleet, compute reward."""
+    async def _dispatch_experiment(self, bash_tool, instance_id: str | None) -> tuple[float, str]:
+        """Read modified train.py, dispatch to GPU fleet, compute reward.
+
+        Returns (reward, feedback) tuple. Feedback is passed through to SDPO's
+        self-distillation pipeline via extra_fields["reward_extra_info"]["feedback"].
+        """
         if bash_tool is None or instance_id is None:
-            return -1.0
+            return -1.0, "No bash tool or instance available."
 
         modified = bash_tool.read_train_py(instance_id)
         if modified is None:
             logger.warning(f"No modified train.py found for instance {instance_id}")
-            return -1.0
+            return -1.0, "No modified train.py found."
 
         from environment import compute_reward, parse_metrics
 
@@ -154,8 +159,9 @@ class AutoresearchAgentLoop(ToolAgentLoop):
         output = await asyncio.to_thread(pool.run, modified)
 
         if output.returncode != 0:
-            logger.warning(f"Experiment crashed (exit {output.returncode}): {output.stderr[:2000] if output.stderr else output.stdout[-2000:] if output.stdout else 'no output'}")
-            return -1.0
+            crash_info = output.stderr[:2000] if output.stderr else output.stdout[-2000:] if output.stdout else 'no output'
+            logger.warning(f"Experiment crashed (exit {output.returncode}): {crash_info}")
+            return -1.0, f"Experiment crashed (exit {output.returncode}): {crash_info}"
 
         metrics = parse_metrics(output.stdout)
         val_bpb = metrics.get("val_bpb")
@@ -166,4 +172,4 @@ class AutoresearchAgentLoop(ToolAgentLoop):
                 self._best_val_bpb = val_bpb
 
         logger.info(f"Experiment: val_bpb={val_bpb}, reward={reward:.4f}, status={status}")
-        return reward
+        return reward, feedback
