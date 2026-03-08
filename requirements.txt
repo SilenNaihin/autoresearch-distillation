@@ -1,0 +1,74 @@
+# Pinned requirements for autoresearch-distillation on H100 GPUs
+# Tested with: Python 3.12, CUDA 12.8, H100 80GB
+# Install: pip install -r requirements.txt
+#
+# NOTE: Install order matters due to dependency conflicts.
+# Use scripts/setup_gpu_box.sh for automated setup.
+
+# Core ML stack (installed first by setup script)
+torch==2.9.0
+torchvision==0.24.0
+torchaudio==2.9.0
+triton==3.5.0
+
+# vLLM (serving + rollout engine)
+vllm==0.12.0
+
+# Flash attention - prebuilt wheel for torch 2.9 + CUDA 12 + CXX11 ABI
+flash_attn @ https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.3/flash_attn-2.8.3+cu12torch2.9cxx11abiTRUE-cp312-cp312-linux_x86_64.whl
+
+# Ray (distributed orchestration)
+ray==2.53.0
+
+# OpenTelemetry - must be upgraded from Ray's defaults to avoid crash
+opentelemetry-api==1.40.0
+opentelemetry-sdk==1.40.0
+opentelemetry-exporter-otlp==1.40.0
+opentelemetry-exporter-otlp-proto-grpc==1.40.0
+opentelemetry-exporter-otlp-proto-http==1.40.0
+opentelemetry-exporter-otlp-proto-common==1.40.0
+opentelemetry-exporter-prometheus==0.61b0
+opentelemetry-proto==1.40.0
+opentelemetry-semantic-conventions==0.61b0
+
+# HuggingFace ecosystem
+transformers==4.57.1
+tokenizers==0.22.2
+datasets==4.4.2
+accelerate==1.12.0
+safetensors==0.7.0
+huggingface_hub==0.36.2
+peft==0.18.0
+
+# Training / fine-tuning
+hydra-core==1.3.2
+omegaconf==2.3.0
+einops==0.8.2
+wandb==0.23.1
+tensorboard==2.20.0
+
+# vLLM / inference deps
+flashinfer-python==0.5.3
+xgrammar==0.1.27
+compressed-tensors==0.12.2
+msgspec==0.20.0
+pybase64==1.4.3
+outlines==0.1.11
+outlines_core==0.2.11
+lm-format-enforcer==0.11.3
+
+# Numerical / scientific
+numpy==2.2.6
+scipy==1.17.1
+pandas==2.3.3
+pyarrow==22.0.0
+
+# Utilities
+cloudpickle==3.1.2
+filelock==3.25.0
+pydantic==2.12.5
+PyYAML==6.0.3
+pyzmq==27.1.0
+requests==2.32.5
+tqdm==4.67.3
+regex==2026.2.28
