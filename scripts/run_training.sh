@@ -9,6 +9,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 SDPO_ROOT="$PROJECT_ROOT/SDPO"
+PYTHON="${PYTHON:-/data/envs/vllm/bin/python}"
 
 # Load environment variables
 if [ -f "$PROJECT_ROOT/.env" ]; then
@@ -23,7 +24,7 @@ DATA_DIR="$PROJECT_ROOT/data/autoresearch"
 # Ensure data is prepared
 if [ ! -f "$DATA_DIR/train.parquet" ] || [ ! -f "$DATA_DIR/test.parquet" ]; then
     echo "Data not found. Preparing autoresearch dataset..."
-    python "$PROJECT_ROOT/data/prepare_autoresearch.py"
+    $PYTHON "$PROJECT_ROOT/data/prepare_autoresearch.py"
 fi
 
 # Export required variables
@@ -63,7 +64,7 @@ echo "============================================"
 # Shift past the experiment name if provided
 shift 2>/dev/null || true
 
-python -m verl.trainer.main_ppo \
+$PYTHON -m verl.trainer.main_ppo \
     --config-name "$CONFIG_NAME" \
     vars.dir="$PROJECT_ROOT" \
     vars.ckpt_dir="$PROJECT_ROOT/checkpoints" \

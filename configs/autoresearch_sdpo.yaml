@@ -11,8 +11,8 @@ max_model_len: 40960
 data:
   train_files: ["${vars.dir}/data/autoresearch/train.parquet"]
   val_files: ["${vars.dir}/data/autoresearch/test.parquet"]
-  train_batch_size: 8
-  max_prompt_length: 4096
+  train_batch_size: 1
+  max_prompt_length: 32768
   max_response_length: 32768
   return_raw_chat: True
   filter_overlong_prompts: True
@@ -60,6 +60,9 @@ algorithm:
 critic:
   model:
     path: Qwen/Qwen3-4B
+
+custom_reward_function:
+  path: ${vars.dir}/reward.py
 
 reward_model:
   use_reward_loop: False
