@@ -45,6 +45,16 @@ actor_rollout_ref:
     max_model_len: ${max_model_len}
     max_num_batched_tokens: ${max_model_len}
     calculate_log_probs: True
+    multi_turn:
+      enable: True
+      max_user_turns: 20
+      max_assistant_turns: 20
+      max_parallel_calls: 1
+      max_tool_response_length: 10000
+      tool_response_truncate_side: right
+      tool_config_path: configs/bash_tool_config.yaml
+      format: hermes
+      interaction_config_path: null
     agent:
       default_agent_loop: autoresearch_agent
       agent_loop_config_path: null

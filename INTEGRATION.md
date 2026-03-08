@@ -2,12 +2,42 @@
 
 ## What's here
 
-Two files you care about:
+Key files:
 
-- **`environment.py`** — `ExperimentEnvironment` class. Handles prompts, diff extraction, patch application, reward computation, rollout logging.
+- **`bash_tool.py`** — Multi-turn editing via mini-swe-agent. `create_isolated_workdir()` + `run_agent_episode()` for data collection, `BashTool` for VERL RL training.
+- **`environment.py`** — `ExperimentEnvironment` class (legacy single-turn), `compute_reward()`, `parse_metrics()`.
 - **`runners.py`** — `GPUPoolRunner` class. Manages 6 H100 GPUs across 4 machines. Thread-safe, auto-allocates experiments to free GPUs.
+- **`prompts.py`** — Shared prompt templates for bash-tool editing.
 
-## Quick start
+## Quick start (multi-turn, recommended)
+
+```python
+from bash_tool import create_isolated_workdir, run_agent_episode
+from environment import compute_reward, parse_metrics
+from prompts import SYSTEM_PROMPT, build_instance_prompt
+from runners import GPUPoolRunner
+
+pool = GPUPoolRunner()
+baseline = open("autoresearch/train.py").read()
+
+# 1. Build prompts
+system = SYSTEM_PROMPT
+instance = build_instance_prompt(baseline, history_lines=[])
+
+# 2. Run multi-turn editing session
+workdir = create_isolated_workdir("autoresearch")
+modified_train_py, trajectory = run_agent_episode(workdir, model, system, instance)
+
+# 3. Dispatch to GPU fleet
+output = pool.run(modified_train_py)
+
+# 4. Parse metrics, compute reward
+metrics = parse_metrics(output.stdout)
+val_bpb = metrics.get("val_bpb")
+reward, status, feedback = compute_reward(val_bpb, best_val_bpb)
+```
+
+## Quick start (legacy single-turn)
 
 ```python
 from environment import ExperimentEnvironment
@@ -34,7 +64,17 @@ result.diff        # str | None — the extracted diff
 result.metrics     # dict — all parsed metrics from train.py output
 ```
 
-## What `env.step()` does internally
+## Multi-turn editing flow
+
+1. `create_isolated_workdir()` copies autoresearch/ to a temp dir (~750KB)
+2. mini-swe-agent's `DefaultAgent` runs in the workdir with a bash tool
+3. Model reads `train.py`, makes edits via sed/cat/python, verifies changes
+4. Model submits: `echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT`
+5. Modified `train.py` is read from the workdir
+6. Dispatched to a remote GPU via `GPUPoolRunner`
+7. `val_bpb` parsed → `compute_reward()` → scalar for RL
+
+## Legacy single-turn flow (env.step)
 
 1. Extracts a unified diff from the model response (looks for ````diff` blocks)
 2. Applies the patch to a local copy of `train.py`, snapshots the content, reverts immediately
@@ -61,17 +101,15 @@ with ThreadPoolExecutor(max_workers=6) as executor:
 
 ## VERL integration
 
-For VERL's reward pipeline, wrap `env.step()` as a `compute_score` function:
+`AutoresearchAgentLoop` in `agent_loop.py` extends VERL's `ToolAgentLoop` for multi-turn bash editing:
 
-```python
-def compute_score(data_source, solution_str, ground_truth, extra_info):
-    result = env.step(solution_str)
-    return {
-        "score": result.reward,
-        "status": result.status,
-        "val_bpb": result.val_bpb,
-    }
-```
+1. Model uses a `BashTool` to edit `train.py` across multiple turns
+2. VERL's state machine handles: PENDING → GENERATING → PROCESSING_TOOLS → ... → TERMINATED
+3. Tool response tokens are masked (`response_mask=0`) — only the model's bash commands are trained on
+4. After submission, modified `train.py` is dispatched to `GPUPoolRunner`
+5. `compute_reward()` returns the scalar for RL
+
+Config: `configs/autoresearch_sdpo.yaml` (multi-turn enabled with `configs/bash_tool_config.yaml`)
 
 ## GPU fleet
 
@@ -100,11 +138,13 @@ All machines are set up and verified. `test_e2e.py` confirms 6/6 passing.
 
 ## What the model sees
 
-**System prompt**: "You are an autonomous ML researcher optimizing a GPT pretraining script..." — instructs the model to output reasoning + a single unified diff.
+**System prompt** (`prompts.py`): Instructs the model to edit `train.py` using bash commands (cat, sed, etc.), verify changes, and submit when satisfied.
 
-**User message**: Contains the full `train.py` source + recent experiment history (last 20 results from `results.tsv`).
+**Instance prompt**: Contains the full `train.py` source + recent experiment history (last 20 results from `results.tsv`).
 
-**Expected output**: Reasoning text followed by a ````diff` block with a unified patch modifying only `train.py`.
+**Tools available**: A single `bash` tool for executing commands in the isolated workdir.
+
+**Expected behavior**: Model reads `train.py`, makes targeted edits, verifies them, then runs `echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT`.
 
 ## Files written during the loop
 

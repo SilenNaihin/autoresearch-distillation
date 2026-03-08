@@ -188,22 +188,10 @@ class ExperimentEnvironment:
                                 metrics=metrics, feedback=f"No val_bpb in output:\n{tail}")
 
         # 7. Compute reward from val_bpb
-        improved = val_bpb < self.best_val_bpb
-        if improved:
-            delta = self.best_val_bpb - val_bpb  # positive = better
-            old_best = self.best_val_bpb
+        reward, status, feedback = compute_reward(val_bpb, self.best_val_bpb)
+        if status == "improvement":
             self.best_val_bpb = val_bpb
-            reward = delta * 100  # 0.01 bpb improvement → reward 1.0
-            feedback = (f"SUCCESS: val_bpb={val_bpb:.6f} (new best). "
-                        f"Previous best: {old_best:.6f}, delta: -{delta:.6f}. "
-                        f"Memory: {memory_gb:.1f} GB.")
-            status = "improvement"
-        else:
-            delta = val_bpb - self.best_val_bpb  # positive = worse
-            reward = -delta * 50
-            feedback = (f"NO IMPROVEMENT: val_bpb={val_bpb:.6f}, best={self.best_val_bpb:.6f}. "
-                        f"Memory: {memory_gb:.1f} GB. Try something different.")
-            status = "no_improvement"
+        feedback += f" Memory: {memory_gb:.1f} GB."
 
         return self._finish(status, model_response, reward=reward,
                             val_bpb=val_bpb, best_val_bpb=self.best_val_bpb,
@@ -383,6 +371,29 @@ def _extract_description(response: str, max_len: int = 80) -> str:
         if len(line) > 10:
             return line[:max_len]
     return "no description"
+
+
+def compute_reward(val_bpb: float | None, best_val_bpb: float) -> tuple[float, str, str]:
+    """Compute reward from val_bpb relative to best seen so far.
+
+    Returns (reward, status, feedback).
+    """
+    if val_bpb is None:
+        return -1.0, "crash", "No val_bpb in output."
+
+    if val_bpb < best_val_bpb:
+        delta = best_val_bpb - val_bpb  # positive = better
+        reward = delta * 100  # 0.01 bpb improvement → reward 1.0
+        status = "improvement"
+        feedback = (f"SUCCESS: val_bpb={val_bpb:.6f} (new best). "
+                    f"Previous best: {best_val_bpb:.6f}, delta: -{delta:.6f}.")
+    else:
+        delta = val_bpb - best_val_bpb  # positive = worse
+        reward = -delta * 50
+        status = "no_improvement"
+        feedback = (f"NO IMPROVEMENT: val_bpb={val_bpb:.6f}, best={best_val_bpb:.6f}. "
+                    f"Try something different.")
+    return reward, status, feedback
 
 
 def _tail(text: str, n: int) -> str:

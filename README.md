@@ -10,19 +10,23 @@ Built on [Karpathy's autoresearch](https://github.com/karpathy/autoresearch) and
 ┌──────────────────────────────────────────────────────────────────┐
 │                     SDPO TRAINING LOOP                           │
 │                                                                  │
-│   1. Qwen3-4B generates a unified diff for train.py             │
-│   2. Diff dispatched to a remote H100 via SSH                   │
-│   3. uv run train.py executes (5 min fixed budget)              │
-│   4. val_bpb parsed → reward signal computed                    │
-│   5. SDPO updates model weights from the rollout                │
-│   6. GOTO 1 — model improves at proposing experiments           │
+│   1. Model receives prompt (train.py + experiment history)       │
+│   2. Model edits train.py via bash tool (multi-turn)             │
+│   3. Model submits when satisfied with changes                   │
+│   4. Modified train.py dispatched to a remote H100 via SSH       │
+│   5. uv run train.py executes (5 min fixed budget)               │
+│   6. val_bpb parsed → reward signal computed                     │
+│   7. SDPO updates model weights from the rollout                 │
+│   8. GOTO 1 — model improves at proposing experiments            │
 │                                                                  │
 │   No separate reward model. No offline data collection.          │
-│   The agent trains on live experiment outcomes.                  │
+│   The agent trains on live experiment outcomes.                   │
 └──────────────────────────────────────────────────────────────────┘
 ```
 
-The model sees `train.py` + experiment history, outputs reasoning + a diff, and gets a scalar reward based on whether `val_bpb` improved. SDPO (Self-Distillation Policy Optimization) uses the model's own successful rollouts as the teacher signal — no separate reward model or critic needed.
+The model sees `train.py` + experiment history, uses bash commands to read and edit the file in an isolated workdir, and submits when satisfied. The modified script is dispatched to a GPU for evaluation, and the model gets a scalar reward based on whether `val_bpb` improved. SDPO (Self-Distillation Policy Optimization) uses the model's own successful rollouts as the teacher signal — no separate reward model or critic needed.
+
+The multi-turn editing approach (via [mini-swe-agent](https://github.com/SWE-agent/mini-swe-agent)) lets the model verify its changes before submission, recovering from malformed edits that would fail silently in a single-turn diff-based approach.
 
 ## Architecture
 
@@ -31,9 +35,9 @@ box3 (h100-dev-box-3)           — vLLM inference + FSDP2 training (2 GPUs)
 box1, box2, box4, box5          — experiment execution (6 H100s total)
 ```
 
-**VERL** (via SDPO fork) handles the RL training loop: rollout generation, advantage estimation, policy updates. Our custom `AutoresearchAgentLoop` plugs into VERL's agent loop system — it generates a response, then calls `ExperimentEnvironment.step()` which dispatches the experiment to a free GPU and returns the reward.
+**VERL** (via SDPO fork) handles the RL training loop: rollout generation, advantage estimation, policy updates. Our custom `AutoresearchAgentLoop` extends VERL's `ToolAgentLoop` — the model uses a bash tool to edit `train.py` across multiple turns, then the modified script is dispatched to a GPU and the experiment reward flows back into training. Tool response tokens are masked (`response_mask=0`), so we only train on the model's decisions.
 
-**ExperimentEnvironment** handles prompt construction, diff extraction, patch application, experiment dispatch (via `GPUPoolRunner`), metric parsing, and reward computation.
+**ExperimentEnvironment** handles prompt construction, diff extraction, patch application, experiment dispatch (via `GPUPoolRunner`), metric parsing, and reward computation. (Used by the legacy single-turn `loop.py`; the multi-turn `loop_swe.py` calls these components directly.)
 
 **GPUPoolRunner** manages 6 remote H100s via SSH. Thread-safe — multiple experiments run in parallel automatically.
 
@@ -63,13 +67,17 @@ box1, box2, box4, box5          — experiment execution (6 H100s total)
 
 ```
 autoresearch-distillation/
-├── agent_loop.py              # VERL agent loop — generates response, runs experiment, returns reward
+├── agent_loop.py              # VERL agent loop — extends ToolAgentLoop for multi-turn bash editing
+├── bash_tool.py               # Isolated workdir, mini-swe-agent runner, VERL BashTool
 ├── environment.py             # ExperimentEnvironment — prompt, diff, patch, reward logic
 ├── runners.py                 # GPUPoolRunner — SSH dispatch to 6 remote H100s
-├── loop.py                    # Standalone data collection loop (Qwen3-32B via vLLM API)
+├── prompts.py                 # Shared prompt templates for bash-tool editing
+├── loop_swe.py                # Multi-turn data collection loop (mini-swe-agent + vLLM)
+├── loop.py                    # Legacy single-turn data collection loop (diff-based)
 │
 ├── configs/
-│   └── autoresearch_sdpo.yaml # Hydra config for SDPO training
+│   ├── autoresearch_sdpo.yaml # Hydra config for SDPO training (multi-turn enabled)
+│   └── bash_tool_config.yaml  # VERL tool config for bash tool
 ├── data/
 │   └── prepare_autoresearch.py # Convert rollouts.jsonl → parquet for SDPO
 ├── scripts/
@@ -88,14 +96,16 @@ autoresearch-distillation/
 
 ## Usage
 
-### 1. Collect rollouts (standalone loop)
+### 1. Collect rollouts (multi-turn loop)
 
-Uses Qwen3-32B via vLLM to generate diffs and run experiments. Produces `rollouts/rollouts.jsonl`.
+Uses Qwen3-32B via vLLM + mini-swe-agent for multi-turn bash editing. The model reads `train.py`, makes edits, verifies them, and submits. Produces `rollouts/rollouts.jsonl`.
 
 ```bash
-# Start vLLM on GPU 0, experiments on GPU 1
-python loop.py
+# Start vLLM on GPU 0, experiments dispatched to GPU fleet
+python loop_swe.py
 ```
+
+A legacy single-turn loop (`loop.py`) is also available — it uses SEARCH/REPLACE blocks instead of bash commands.
 
 ### 2. Prepare training data
 
@@ -107,7 +117,7 @@ python data/prepare_autoresearch.py
 
 ### 3. Run SDPO training
 
-Launches VERL with our custom agent loop. The model generates diffs during training, experiments run on 6 remote GPUs, and rewards flow back into the policy update.
+Launches VERL with our custom agent loop. The model uses a bash tool to edit `train.py` across multiple turns during training, experiments run on 6 remote GPUs, and rewards flow back into the policy update.
 
 ```bash
 bash scripts/run_training.sh

@@ -63,6 +63,9 @@ scipy==1.17.1
 pandas==2.3.3
 pyarrow==22.0.0
 
+# mini-swe-agent (multi-turn bash editing for agent loops)
+mini-swe-agent==2.2.6
+
 # Utilities
 cloudpickle==3.1.2
 filelock==3.25.0

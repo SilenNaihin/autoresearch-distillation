@@ -1,0 +1,18 @@
+tools:
+  - class_name: "bash_tool.BashTool"
+    config:
+      type: native
+      command_timeout: 30
+      autoresearch_dir: autoresearch
+    tool_schema:
+      type: "function"
+      function:
+        name: "bash"
+        description: "Execute a bash command in the working directory containing train.py"
+        parameters:
+          type: "object"
+          properties:
+            command:
+              type: "string"
+              description: "The bash command to execute"
+          required: ["command"]
