@@ -198,6 +198,7 @@ def apply_patch(diff_text: str) -> tuple[bool, str]:
         f.write(diff_text)
         patch_path = f.name
     try:
+        # Try strict apply
         r = subprocess.run(["git", "apply", "--check", patch_path],
                            capture_output=True, text=True, cwd=AUTORESEARCH_DIR, timeout=10)
         if r.returncode == 0:
@@ -205,14 +206,61 @@ def apply_patch(diff_text: str) -> tuple[bool, str]:
                                capture_output=True, text=True, cwd=AUTORESEARCH_DIR, timeout=10)
             if r.returncode == 0:
                 return True, ""
-            return False, r.stderr.strip()
-        r = subprocess.run(["git", "apply", "--3way", patch_path],
+        # Try fuzzy matching (ignore line numbers, no context required)
+        r = subprocess.run(["git", "apply", "-C0", "--unidiff-zero", patch_path],
                            capture_output=True, text=True, cwd=AUTORESEARCH_DIR, timeout=10)
         if r.returncode == 0:
             return True, ""
-        return False, r.stderr.strip()
+        # Try content-based fallback: parse hunks and do str.replace
+        ok, err = _apply_patch_fallback(diff_text)
+        if ok:
+            return True, ""
+        return False, err
     finally:
         os.unlink(patch_path)
+
+
+def _apply_patch_fallback(diff_text: str) -> tuple[bool, str]:
+    """Parse unified diff hunks and apply as string replacements."""
+    train_path = os.path.join(AUTORESEARCH_DIR, TRAIN_PY)
+    content = Path(train_path).read_text()
+    old_lines = []
+    new_lines = []
+    in_hunk = False
+
+    for line in diff_text.splitlines():
+        if line.startswith("@@"):
+            # Apply previous hunk if any
+            if old_lines or new_lines:
+                old_block = "\n".join(old_lines)
+                new_block = "\n".join(new_lines)
+                if old_block and old_block in content:
+                    content = content.replace(old_block, new_block, 1)
+                elif old_block:
+                    return False, f"Could not find hunk in file: {old_block[:80]}..."
+            old_lines = []
+            new_lines = []
+            in_hunk = True
+        elif in_hunk:
+            if line.startswith("-"):
+                old_lines.append(line[1:])
+            elif line.startswith("+"):
+                new_lines.append(line[1:])
+            elif line.startswith(" "):
+                old_lines.append(line[1:])
+                new_lines.append(line[1:])
+
+    # Apply last hunk
+    if old_lines or new_lines:
+        old_block = "\n".join(old_lines)
+        new_block = "\n".join(new_lines)
+        if old_block and old_block in content:
+            content = content.replace(old_block, new_block, 1)
+        elif old_block:
+            return False, f"Could not find hunk in file: {old_block[:80]}..."
+
+    Path(train_path).write_text(content)
+    return True, ""
 
 
 def revert_train_py():
