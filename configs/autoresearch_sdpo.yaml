@@ -55,7 +55,7 @@ actor_rollout_ref:
       max_parallel_calls: 1
       max_tool_response_length: 10000
       tool_response_truncate_side: right
-      tool_config_path: configs/bash_tool_config.yaml
+      tool_config_path: ${vars.dir}/configs/bash_tool_config.yaml
       format: hermes
       interaction_config_path: null
     agent:

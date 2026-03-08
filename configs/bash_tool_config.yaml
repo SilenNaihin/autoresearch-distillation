@@ -3,7 +3,7 @@ tools:
     config:
       type: native
       command_timeout: 30
-      autoresearch_dir: autoresearch
+      autoresearch_dir: /home/azureuser/autoresearch-distillation/autoresearch
     tool_schema:
       type: "function"
       function:
