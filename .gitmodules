@@ -1,3 +1,6 @@
 [submodule "autoresearch"]
 	path = autoresearch
 	url = https://github.com/karpathy/autoresearch.git
+[submodule "SDPO"]
+	path = SDPO
+	url = https://github.com/lasgroup/SDPO.git
