@@ -95,8 +95,7 @@ class AutoresearchAgentLoop(ToolAgentLoop):
             # Post-submission: dispatch experiment to GPU fleet
             t0 = time.monotonic()
             reward, feedback = await self._dispatch_experiment(bash_tool, instance_id)
-            dispatch_s = time.monotonic() - t0
-            logger.info(f"Experiment dispatch took {dispatch_s:.1f}s, reward={reward:.4f}")
+            output.metrics.experiment_dispatch = time.monotonic() - t0
             output.reward_score = reward
             output.extra_fields["reward_extra_info"] = {"feedback": feedback}
 
