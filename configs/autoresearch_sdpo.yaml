@@ -23,9 +23,11 @@ actor_rollout_ref:
   model:
     path: Qwen/Qwen3-4B
     trust_remote_code: True
+    override_config:
+      attn_implementation: sdpa
   actor:
     ppo_micro_batch_size_per_gpu: 1
-    ppo_mini_batch_size: 8
+    ppo_mini_batch_size: 1
     policy_loss:
       loss_mode: sdpo
     self_distillation:
@@ -41,7 +43,8 @@ actor_rollout_ref:
     name: vllm
     n: 8
     temperature: 0.7
-    gpu_memory_utilization: 0.55
+    tensor_model_parallel_size: 1
+    gpu_memory_utilization: 0.35
     max_model_len: ${max_model_len}
     max_num_batched_tokens: ${max_model_len}
     calculate_log_probs: True
@@ -57,7 +60,7 @@ actor_rollout_ref:
       interaction_config_path: null
     agent:
       default_agent_loop: autoresearch_agent
-      agent_loop_config_path: null
+      agent_loop_config_path: ${vars.dir}/configs/agent_loops.yaml
 
 algorithm:
   adv_estimator: grpo
