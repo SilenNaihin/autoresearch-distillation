@@ -23,7 +23,6 @@ import logging
 import os
 import sys
 import threading
-import time
 from typing import Any
 
 # Ensure SDPO's verl is importable
@@ -93,9 +92,7 @@ class AutoresearchAgentLoop(ToolAgentLoop):
             output = await super().run(sampling_params, **kwargs)
 
             # Post-submission: dispatch experiment to GPU fleet
-            t0 = time.monotonic()
             reward, feedback = await self._dispatch_experiment(bash_tool, instance_id)
-            output.metrics.experiment_dispatch = time.monotonic() - t0
             output.reward_score = reward
             output.extra_fields["reward_extra_info"] = {"feedback": feedback}
 
