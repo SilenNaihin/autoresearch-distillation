@@ -159,12 +159,25 @@ class AutoresearchAgentLoop(ToolAgentLoop):
         output = await asyncio.to_thread(pool.run, modified)
 
         if output.returncode != 0:
-            crash_info = output.stderr[:2000] if output.stderr else output.stdout[-2000:] if output.stdout else 'no output'
+            # Combine stderr and stdout tail for maximum crash context.
+            # Remote cmd uses 2>&1, so experiment errors are in stdout;
+            # stderr is SSH-level errors only.
+            parts = []
+            if output.stderr and output.stderr.strip():
+                parts.append(output.stderr.strip()[:1000])
+            if output.stdout and output.stdout.strip():
+                parts.append(output.stdout.strip()[-1000:])
+            crash_info = "\n".join(parts) if parts else "no output"
             logger.warning(f"Experiment crashed (exit {output.returncode}): {crash_info}")
-            return -1.0, f"Experiment crashed (exit {output.returncode}): {crash_info}"
+            return -1.0, f"Experiment crashed (exit {output.returncode}):\n{crash_info}"
 
         metrics = parse_metrics(output.stdout)
         val_bpb = metrics.get("val_bpb")
+
+        if val_bpb is None:
+            tail = "\n".join(output.stdout.strip().splitlines()[-20:]) if output.stdout else "empty output"
+            logger.warning(f"No val_bpb in experiment output. Tail:\n{tail}")
+            return -1.0, f"Experiment ran but produced no val_bpb metric. Output tail:\n{tail}"
 
         with self._best_lock:
             reward, status, feedback = compute_reward(val_bpb, self._best_val_bpb)
