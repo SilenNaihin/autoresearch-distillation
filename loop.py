@@ -57,7 +57,7 @@ def start_vllm_server():
     cmd += [
         "serve", VLLM_MODEL,
         "--port", str(VLLM_PORT),
-        "--max-model-len", "65536",
+        "--max-model-len", "40960",
         "--dtype", "bfloat16",
         "--gpu-memory-utilization", "0.9",
     ]
