@@ -51,6 +51,8 @@ def start_vllm_server():
     global _vllm_process
     env = os.environ.copy()
     env["CUDA_VISIBLE_DEVICES"] = INFERENCE_GPU
+    env["HF_HOME"] = "/data/huggingface"
+    env["TMPDIR"] = "/data/tmp"
 
     vllm_bin = os.path.expanduser("~/vllm-env/bin/vllm")
     cmd = [vllm_bin] if os.path.exists(vllm_bin) else ["vllm"]
