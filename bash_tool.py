@@ -39,9 +39,9 @@ def create_isolated_workdir(autoresearch_dir: str = "autoresearch") -> str:
     Returns the temp dir path.
     """
     src = os.path.abspath(autoresearch_dir)
-    tmpdir = tempfile.mkdtemp(prefix="autoresearch_workdir_")
+    tmpdir = tempfile.mkdtemp(prefix="autoresearch_workdir_", dir="/data/tmp")
     shutil.copytree(src, tmpdir, dirs_exist_ok=True,
-                    ignore=shutil.ignore_patterns("__pycache__", ".git", "*.pyc"))
+                    ignore=shutil.ignore_patterns("__pycache__", ".git", "*.pyc", ".venv"))
     return tmpdir
 
 

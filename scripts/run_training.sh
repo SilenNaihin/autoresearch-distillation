@@ -18,6 +18,9 @@ fi
 
 # Defaults
 EXPERIMENT_NAME="${1:-qwen3-4b-sdpo}"
+
+export RAY_TMPDIR=/data/tmp
+export TMPDIR=/data/tmp
 CONFIG_NAME="autoresearch_sdpo"
 DATA_DIR="$PROJECT_ROOT/data/autoresearch"
 

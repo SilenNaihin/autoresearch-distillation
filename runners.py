@@ -15,6 +15,7 @@ concurrently — the pool handles queuing.
 
 from __future__ import annotations
 
+import os
 import subprocess
 import threading
 from dataclasses import dataclass
@@ -81,10 +82,13 @@ class SSHRunner:
             return RunOutput("", f"[{slot.name}] SSH error during file sync: {e}", -1)
 
         # 2. Run experiment on remote GPU
+        #    - Kill any stale train.py on this GPU first
         #    - PATH includes ~/.local/bin for uv
         #    - Redirect stderr to stdout so we capture everything
         #    - Exit code signals: 137=OOM killed, 139=segfault, -9=SIGKILL
         cmd = (
+            f"nvidia-smi --query-compute-apps=pid --id={slot.gpu_id} --format=csv,noheader "
+            f"| xargs -r kill -9 2>/dev/null; sleep 2; "
             f"export PATH=$HOME/.local/bin:$PATH && "
             f"cd {slot.remote_dir} && "
             f"CUDA_VISIBLE_DEVICES={slot.gpu_id} uv run train.py 2>&1"
@@ -108,7 +112,8 @@ class SSHRunner:
             try:
                 subprocess.run(
                     ["ssh", "-o", "ConnectTimeout=5", slot.host,
-                     f"pkill -9 -f 'CUDA_VISIBLE_DEVICES={slot.gpu_id}.*train.py'"],
+                     f"nvidia-smi --query-compute-apps=pid --id={slot.gpu_id} --format=csv,noheader "
+                     f"| xargs -r kill -9 2>/dev/null"],
                     capture_output=True, timeout=10,
                 )
             except Exception:
@@ -126,50 +131,56 @@ class SSHRunner:
 class GPUPoolRunner:
     """Pool of GPU slots with automatic allocation.
 
-    Thread-safe. If all GPUs are busy, callers block until one frees up.
+    Uses file-based locking (fcntl.flock) for cross-process safety.
+    Multiple Ray workers can safely share GPU slots without collisions.
     """
+
+    LOCK_DIR = "/data/tmp/gpu_locks"
 
     def __init__(self, slots: list[GPUSlot] | None = None, timeout: int = 600):
         self.slots = slots or list(FLEET)
         self.timeout = timeout
-        self._pool: Queue[GPUSlot] = Queue()
-        for slot in self.slots:
-            self._pool.put(slot)
-        self._active: dict[str, GPUSlot] = {}
-        self._lock = threading.Lock()
+        os.makedirs(self.LOCK_DIR, exist_ok=True)
 
     def run(self, train_py: str) -> RunOutput:
-        slot = self._pool.get()  # blocks if all busy
-        tid = threading.current_thread().name
-        with self._lock:
-            self._active[tid] = slot
+        slot, lock_fd = self._acquire_slot()
         try:
-            print(f"[pool] {slot.name} <- dispatching ({self.available}/{self.total} free)")
+            print(f"[pool] {slot.name} <- dispatching")
             runner = SSHRunner(slot, timeout=self.timeout)
             result = runner.run(train_py)
             status = "ok" if result.returncode == 0 else f"exit {result.returncode}"
             print(f"[pool] {slot.name} -> done ({status})")
             return result
         finally:
-            with self._lock:
-                self._active.pop(tid, None)
-            self._pool.put(slot)
+            self._release_slot(lock_fd)
 
-    @property
-    def available(self) -> int:
-        return self._pool.qsize()
+    def _acquire_slot(self) -> tuple[GPUSlot, int]:
+        """Acquire an exclusive lock on an available GPU slot."""
+        import fcntl
+        import time
+        while True:
+            for slot in self.slots:
+                lock_path = os.path.join(self.LOCK_DIR, f"{slot.name}.lock")
+                lock_fd = open(lock_path, "w")
+                try:
+                    fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    return slot, lock_fd
+                except BlockingIOError:
+                    lock_fd.close()
+            time.sleep(2)
+
+    def _release_slot(self, lock_fd) -> None:
+        """Release the GPU slot lock."""
+        import fcntl
+        try:
+            fcntl.flock(lock_fd, fcntl.LOCK_UN)
+            lock_fd.close()
+        except Exception:
+            pass
 
     @property
     def total(self) -> int:
         return len(self.slots)
-
-    def status(self) -> dict:
-        with self._lock:
-            return {
-                "total": self.total,
-                "available": self.available,
-                "active": {k: v.name for k, v in self._active.items()},
-            }
 
 
 # ---------------------------------------------------------------------------

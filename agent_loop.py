@@ -144,7 +144,7 @@ class AutoresearchAgentLoop(ToolAgentLoop):
 
         modified = bash_tool.read_train_py(instance_id)
         if modified is None:
-            logger.warning("No modified train.py found after agent submission")
+            logger.warning(f"No modified train.py found for instance {instance_id}")
             return -1.0
 
         from environment import compute_reward, parse_metrics
@@ -154,7 +154,7 @@ class AutoresearchAgentLoop(ToolAgentLoop):
         output = await asyncio.to_thread(pool.run, modified)
 
         if output.returncode != 0:
-            logger.info(f"Experiment crashed (exit {output.returncode})")
+            logger.warning(f"Experiment crashed (exit {output.returncode}): {output.stderr[:2000] if output.stderr else output.stdout[-2000:] if output.stdout else 'no output'}")
             return -1.0
 
         metrics = parse_metrics(output.stdout)

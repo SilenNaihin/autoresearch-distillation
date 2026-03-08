@@ -13,7 +13,7 @@ data:
   val_files: ["${vars.dir}/data/autoresearch/test.parquet"]
   train_batch_size: 1
   max_prompt_length: 32768
-  max_response_length: 32768
+  max_response_length: 8192
   return_raw_chat: True
   filter_overlong_prompts: True
   trust_remote_code: True
@@ -44,14 +44,14 @@ actor_rollout_ref:
     n: 8
     temperature: 0.7
     tensor_model_parallel_size: 1
-    gpu_memory_utilization: 0.35
+    gpu_memory_utilization: 0.20
     max_model_len: ${max_model_len}
     max_num_batched_tokens: ${max_model_len}
     calculate_log_probs: True
     multi_turn:
       enable: True
-      max_user_turns: 20
-      max_assistant_turns: 20
+      max_user_turns: 15
+      max_assistant_turns: 15
       max_parallel_calls: 1
       max_tool_response_length: 10000
       tool_response_truncate_side: right
@@ -93,3 +93,5 @@ trainer:
   critic_warmup: 0
   logger: ["console", "wandb"]
   default_local_dir: ${vars.ckpt_dir}/${trainer.experiment_name}
+  rollout_data_dir: ${vars.dir}/rollout_dumps
+  log_val_generations: 5

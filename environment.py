@@ -381,15 +381,21 @@ def compute_reward(val_bpb: float | None, best_val_bpb: float) -> tuple[float, s
     if val_bpb is None:
         return -1.0, "crash", "No val_bpb in output."
 
+    # First successful run (best_val_bpb is inf): give a moderate positive reward
+    if best_val_bpb == float("inf"):
+        status = "improvement"
+        feedback = f"FIRST RESULT: val_bpb={val_bpb:.6f} (baseline established)."
+        return 1.0, status, feedback
+
     if val_bpb < best_val_bpb:
         delta = best_val_bpb - val_bpb  # positive = better
-        reward = delta * 100  # 0.01 bpb improvement → reward 1.0
+        reward = min(delta * 100, 10.0)  # cap reward at 10.0
         status = "improvement"
         feedback = (f"SUCCESS: val_bpb={val_bpb:.6f} (new best). "
                     f"Previous best: {best_val_bpb:.6f}, delta: -{delta:.6f}.")
     else:
         delta = val_bpb - best_val_bpb  # positive = worse
-        reward = -delta * 50
+        reward = max(-delta * 50, -5.0)  # floor reward at -5.0
         status = "no_improvement"
         feedback = (f"NO IMPROVEMENT: val_bpb={val_bpb:.6f}, best={best_val_bpb:.6f}. "
                     f"Try something different.")
