@@ -39,11 +39,21 @@ actor_rollout_ref:
       dont_reprompt_on_self_success: True
       include_environment_feedback: True
       environment_feedback_only_without_solution: False
+      feedback_template: |-
+
+        The following is feedback from a previous attempt at this problem:
+
+        {feedback_raw}
+      reprompt_template: |-
+
+        {prompt}{solution}{feedback}
+
+        Using the information above, provide the best possible solution.
     optim:
       lr: 1e-5
   rollout:
     name: vllm
-    n: 8
+    n: 1
     temperature: 0.7
     tensor_model_parallel_size: 1
     gpu_memory_utilization: 0.20
