@@ -31,7 +31,7 @@ from typing import Any
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "SDPO"))
 
 from verl.experimental.agent_loop.agent_loop import AgentLoopOutput, register
-from verl.experimental.agent_loop.tool_agent_loop import ToolAgentLoop
+from verl.experimental.agent_loop.tool_agent_loop import AgentState, ToolAgentLoop
 from verl.experimental.agent_loop.tool_parser import FunctionCall
 from verl.tools.schemas import ToolResponse
 
@@ -119,6 +119,15 @@ class AutoresearchAgentLoop(ToolAgentLoop):
             # Clean up workdir
             if bash_tool and instance_id:
                 await bash_tool.release(instance_id)
+
+    async def _handle_processing_tools_state(self, agent_data):
+        """Override to terminate the loop after the model submits."""
+        state = await super()._handle_processing_tools_state(agent_data)
+        bash_tool = self.tools.get("bash")
+        instance_id = agent_data.tools_kwargs.get("_bash_instance_id")
+        if bash_tool and instance_id and bash_tool.is_submitted(instance_id):
+            return AgentState.TERMINATED
+        return state
 
     async def _call_tool(
         self, tool_call: FunctionCall, tools_kwargs: dict[str, Any], agent_data
