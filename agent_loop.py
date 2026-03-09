@@ -94,7 +94,12 @@ class AutoresearchAgentLoop(ToolAgentLoop):
             # Post-submission: dispatch experiment to GPU fleet
             reward, feedback = await self._dispatch_experiment(bash_tool, instance_id)
             output.reward_score = reward
-            output.extra_fields["reward_extra_info"] = {"feedback": feedback}
+            # Pack env metrics from the last dispatch for wandb logging
+            env_metrics = {}
+            for k in ("val_bpb", "peak_vram_mb", "training_seconds", "total_seconds",
+                      "mfu_percent", "total_tokens_M", "num_steps", "num_params_M", "depth"):
+                env_metrics[f"env_{k}"] = float(getattr(self, '_last_env_metrics', {}).get(k, float('nan')))
+            output.extra_fields["reward_extra_info"] = {"feedback": feedback, **env_metrics}
 
             return output
         finally:
@@ -172,6 +177,7 @@ class AutoresearchAgentLoop(ToolAgentLoop):
             return -1.0, f"Experiment crashed (exit {output.returncode}):\n{crash_info}"
 
         metrics = parse_metrics(output.stdout)
+        self._last_env_metrics = metrics
         val_bpb = metrics.get("val_bpb")
 
         if val_bpb is None:

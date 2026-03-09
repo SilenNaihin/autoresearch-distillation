@@ -69,8 +69,8 @@ echo "============================================"
 # Shift past the experiment name if provided
 shift 2>/dev/null || true
 
-$PYTHON -m verl.trainer.main_ppo \
+$PYTHON "$PROJECT_ROOT/run_sdpo.py" \
     --config-name "$CONFIG_NAME" \
     vars.dir="$PROJECT_ROOT" \
-    vars.ckpt_dir="$PROJECT_ROOT/checkpoints" \
+    vars.ckpt_dir="/data/checkpoints" \
     "$@"
