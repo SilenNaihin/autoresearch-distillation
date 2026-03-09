@@ -17,7 +17,7 @@ if [ -f "$PROJECT_ROOT/.env" ]; then
 fi
 
 # Defaults
-EXPERIMENT_NAME="${1:-qwen3-4b-sdpo}"
+EXPERIMENT_NAME="${1:-qwen3-32b-sdpo}"
 
 export RAY_TMPDIR=/data/tmp
 export TMPDIR=/data/tmp
