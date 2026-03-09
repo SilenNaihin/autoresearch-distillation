@@ -4,6 +4,7 @@
 
 Key files:
 
+- **`run_sdpo.py`** — Entry point for SDPO training. Monkey-patches `compute_data_metrics` to log 9 env metrics to wandb, and `_maybe_build_self_distillation_batch` to log decoded teacher reprompt samples as wandb tables.
 - **`bash_tool.py`** — Multi-turn editing via mini-swe-agent. `create_isolated_workdir()` + `run_agent_episode()` for data collection, `BashTool` for VERL RL training.
 - **`environment.py`** — `ExperimentEnvironment` class (legacy single-turn), `compute_reward()`, `parse_metrics()`.
 - **`runners.py`** — `GPUPoolRunner` class. Manages 6 H100 GPUs across 4 machines. Thread-safe, auto-allocates experiments to free GPUs.
@@ -81,7 +82,7 @@ result.metrics     # dict — all parsed metrics from train.py output
 3. Pipes the modified `train.py` to a remote GPU via SSH
 4. Runs `uv run train.py` (~5 min, fixed budget)
 5. Parses `val_bpb` and other metrics from stdout
-6. Computes reward: improvement → positive (scaled by delta), no improvement → small negative, crash → -1.0
+6. Computes reward: `max(0, 0.9979 - val_bpb)` for successes, `0.0` for failures
 7. Logs to `results.tsv` and `rollouts/rollouts.jsonl`
 
 ## Concurrency
@@ -119,7 +120,9 @@ The feedback pipeline connects experiment outcomes to the SDPO teacher prompt:
 # agent_loop.py — _dispatch_experiment returns (reward, feedback)
 reward, feedback = await self._dispatch_experiment(bash_tool, instance_id)
 output.reward_score = reward
-output.extra_fields["reward_extra_info"] = {"feedback": feedback}
+# Packs feedback + 9 env metrics (val_bpb, peak_vram_mb, training_seconds, etc.)
+env_metrics = {f"env_{k}": ... for k in ENV_KEYS}
+output.extra_fields["reward_extra_info"] = {"feedback": feedback, **env_metrics}
 
 # VERL _postprocess() extracts reward_extra_info keys into non_tensor_batch
 # ray_trainer.py _collect_feedback() reads non_tensor_batch["feedback"]
@@ -132,7 +135,7 @@ Key config settings in `autoresearch_sdpo.yaml`:
 self_distillation:
   include_environment_feedback: True                # Enable feedback in teacher prompt
   environment_feedback_only_without_solution: False  # Always include (not just when no solution)
-  success_reward_threshold: 0.5                      # Rollouts above this are "successful"
+  success_reward_threshold: 0.0                      # Any improvement over baseline is "successful"
   dont_reprompt_on_self_success: True                # Don't reprompt already-successful rollouts
 ```
 
@@ -141,6 +144,33 @@ With `environment_feedback_only_without_solution: False`, the teacher prompt inc
 ### Cross-process GPU locking
 
 `GPUPoolRunner` uses `fcntl.flock` file-based locks in `/data/tmp/gpu_locks/` for cross-process safety. Each Ray worker (separate process) can safely acquire GPU slots without collisions. The lock file per slot is `{slot_name}.lock`.
+
+### Environment metrics logging
+
+`run_sdpo.py` monkey-patches `compute_data_metrics` to extract 9 environment metrics from `non_tensor_batch` and log them to wandb:
+
+- `env/val_bpb/{mean,max,min}` — validation bits per byte
+- `env/peak_vram_mb/{mean,max,min}` — peak GPU memory usage
+- `env/training_seconds/{mean,max,min}` — training wall time
+- `env/total_seconds/{mean,max,min}` — total experiment time
+- `env/mfu_percent/{mean,max,min}` — model FLOPs utilization
+- `env/total_tokens_M/{mean,max,min}` — tokens processed (millions)
+- `env/num_steps/{mean,max,min}` — training steps completed
+- `env/num_params_M/{mean,max,min}` — model parameter count (millions)
+- `env/depth/{mean,max,min}` — model depth
+
+These flow from `agent_loop.py` → `reward_extra_info` → `non_tensor_batch` → `compute_data_metrics` → wandb.
+
+### Teacher reprompt logging
+
+`run_sdpo.py` also patches `_maybe_build_self_distillation_batch` to decode and log the first 3 teacher reprompt prefixes as a wandb table (`self_distillation/reprompt_samples`). This lets you inspect what context the teacher model sees during self-distillation.
+
+### Memory management (FSDP2 + vLLM colocated)
+
+Running a 32B model on 2 GPUs requires careful memory management. The config uses:
+- **FSDP2 with `offload_policy: true`**: Offloads model parameters to CPU via `CPUOffloadPolicy(pin_memory=True)`, freeing GPU memory for vLLM during rollout generation.
+- **vLLM `gpu_memory_utilization: 0.70`**: vLLM claims 70% of available GPU memory for KV cache.
+- **`free_cache_engine: true`** (VERL default): Releases vLLM's KV cache during training steps, freeing memory for FSDP2.
 
 Config: `configs/autoresearch_sdpo.yaml` (multi-turn enabled with `configs/bash_tool_config.yaml`)
 
@@ -161,13 +191,15 @@ All machines are set up and verified. `test_e2e.py` confirms 6/6 passing.
 
 ## Reward structure
 
+Reward is computed against a hardcoded baseline (`BASELINE_VAL_BPB = 0.9979`):
+
 | Status | Reward | When |
 |--------|--------|------|
-| improvement | `+delta * 100` | val_bpb beat the best (0.01 improvement → reward 1.0) |
-| no_improvement | `-delta * 50` | val_bpb equal or worse |
-| crash | `-1.0` | script crashed, OOM, segfault, timeout |
-| patch_error | `-1.0` | diff couldn't be applied to train.py |
-| parse_error | `-1.0` | no diff found in model response |
+| improvement | `max(0, 0.9979 - val_bpb)` | val_bpb below baseline |
+| no_improvement | `0.0` | val_bpb at or above baseline |
+| crash / patch_error / parse_error | `0.0` | any failure mode |
+
+No negative rewards. `success_reward_threshold: 0.0` means any improvement over baseline triggers self-distillation.
 
 ## What the model sees
 

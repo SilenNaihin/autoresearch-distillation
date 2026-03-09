@@ -55,13 +55,15 @@ box1, box2, box4, box5          — experiment execution (6 H100s total)
 
 ## Reward Structure
 
+Reward is computed against a hardcoded baseline (`BASELINE_VAL_BPB = 0.9979`):
+
 | Status | Reward | When |
 |--------|--------|------|
-| improvement | `+delta * 100` | val_bpb beat the best (0.01 → reward 1.0) |
-| no_improvement | `-delta * 50` | val_bpb equal or worse |
-| crash | `-1.0` | script crashed, OOM, timeout |
-| patch_error | `-1.0` | diff couldn't be applied |
-| parse_error | `-1.0` | no diff found in model response |
+| improvement | `max(0, 0.9979 - val_bpb)` | val_bpb below baseline |
+| no_improvement | `0.0` | val_bpb at or above baseline |
+| crash / patch_error / parse_error | `0.0` | any failure mode |
+
+No negative rewards. The SDPO `success_reward_threshold` is set to `0.0`, so any rollout that beats baseline is treated as a "success" for self-distillation.
 
 ## Project Structure
 
@@ -75,9 +77,12 @@ autoresearch-distillation/
 ├── loop_swe.py                # Multi-turn data collection loop (mini-swe-agent + vLLM)
 ├── loop.py                    # Legacy single-turn data collection loop (diff-based)
 │
+├── run_sdpo.py               # Entry point — monkey-patches SDPO trainer for env metrics + reprompt logging
+│
 ├── configs/
 │   ├── autoresearch_sdpo.yaml # Hydra config for SDPO training (multi-turn enabled)
-│   └── bash_tool_config.yaml  # VERL tool config for bash tool
+│   ├── bash_tool_config.yaml  # VERL tool config for bash tool
+│   └── agent_loops.yaml       # Agent loop registry (autoresearch_agent)
 ├── data/
 │   └── prepare_autoresearch.py # Convert rollouts.jsonl → parquet for SDPO
 ├── scripts/
@@ -125,14 +130,16 @@ bash scripts/run_training.sh
 
 ### Key config (`configs/autoresearch_sdpo.yaml`)
 
-- **Model**: Qwen/Qwen3-4B
-- **Training GPUs**: 2 (colocated vLLM + FSDP2)
+- **Model**: Qwen/Qwen3-32B
+- **Training GPUs**: 2 (colocated vLLM + FSDP2 with CPU offloading)
 - **Experiment GPUs**: 6 (remote, via SSH)
 - **Rollouts per batch**: 8
-- **Max response length**: 8192 tokens
+- **Max prompt length**: 16384 tokens
+- **Max response length**: 49152 tokens
 - **Learning rate**: 1e-5
 - **Epochs**: 30
 - **Self-distillation**: Environment feedback always included in teacher prompt (not just when no solution exists)
+- **FSDP2 offloading**: `offload_policy: true` offloads model params to CPU, freeing GPU memory for vLLM during rollout
 
 ### Using the environment directly
 
@@ -154,11 +161,13 @@ See [INTEGRATION.md](INTEGRATION.md) for the full API.
 
 ### Wandb metrics to watch
 
+- **`env/val_bpb/mean`**, **`env/peak_vram_mb/mean`**, etc. — Environment metrics from experiment runs (val_bpb, peak_vram_mb, training_seconds, total_seconds, mfu_percent, total_tokens_M, num_steps, num_params_M, depth). Logged as mean/max/min via monkey-patched `compute_data_metrics` in `run_sdpo.py`.
+- **`self_distillation/reprompt_samples`** — Wandb table showing decoded teacher reprompt prefixes (first 3 samples per step). Useful for inspecting what context the teacher model sees.
 - **`feedback_available_fraction`** — Fraction of rollouts with environment feedback. Should be ~1.0. If 0.0, feedback isn't flowing from `agent_loop.py` through the VERL pipeline.
-- **`success_sample_fraction`** — Fraction of rollouts that beat `success_reward_threshold`. High values (>0.8) mean most rollouts succeed — the model is learning.
+- **`success_sample_fraction`** — Fraction of rollouts that beat `success_reward_threshold` (0.0). Any rollout that improves over baseline counts.
 - **`self_distillation_loss`** — KL loss toward the teacher distribution. Should be > 0 when self-distillation is active.
 - **`pg_loss`** — Policy gradient loss. Should be > 0 during training.
-- **`critic/score/mean`** — Average reward. Should be bounded (not inf/nan). If inf, check `compute_reward()` edge cases.
+- **`critic/score/mean`** — Average reward. Should be bounded (not inf/nan).
 
 ### Feedback pipeline
 
@@ -167,11 +176,12 @@ Environment feedback from experiment runs flows through:
 ```
 SSHRunner (box1/2/4/5) → RunOutput(stdout, stderr, returncode)
   → _dispatch_experiment() → (reward, feedback_string)
-    → output.extra_fields["reward_extra_info"]["feedback"]
-      → VERL _postprocess() → non_tensor_batch["feedback"]
+    → output.extra_fields["reward_extra_info"]["feedback"] + env metrics
+      → VERL _postprocess() → non_tensor_batch["feedback"] + env_* keys
         → reward_extra_keys → reward_extra_infos_dict
           → _collect_feedback() → _build_teacher_message()
             → SDPO teacher prompt includes feedback
+        → compute_data_metrics (patched) → env/*/mean|max|min → wandb
 ```
 
 Every failure mode produces a feedback string:
@@ -179,11 +189,17 @@ Every failure mode produces a feedback string:
 - **Experiment crash** (exit != 0): SSH stderr + last 1000 chars of stdout
 - **OOM/segfault**: signal info + partial training output
 - **No val_bpb** (exit 0 but missing metric): last 20 lines of stdout
-- **Success**: `compute_reward()` feedback with val_bpb delta
+- **Success**: `compute_reward()` feedback with val_bpb vs baseline
 
 ### Rollout dumps
 
-Set `trainer.rollout_data_dir` in config. Each training step dumps a JSONL with inputs, outputs, scores, and feedback — useful for debugging what the model is generating.
+Set `trainer.rollout_data_dir` in config (default: `/data/rollout_dumps`). Each training step dumps a JSONL with inputs, outputs, scores, and feedback — useful for debugging what the model is generating.
+
+### Storage paths
+
+On the training server, data is stored under `/data`:
+- `/data/checkpoints/{experiment_name}` — model checkpoints
+- `/data/rollout_dumps` — rollout data per training step
 
 ## Prerequisites
 
