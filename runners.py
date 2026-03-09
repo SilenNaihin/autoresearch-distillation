@@ -89,7 +89,8 @@ class SSHRunner:
         cmd = (
             f"nvidia-smi --query-compute-apps=pid --id={slot.gpu_id} --format=csv,noheader "
             f"| xargs -r kill -9 2>/dev/null; sleep 2; "
-            f"rm -rf /tmp/torchinductor_$USER 2>/dev/null; "
+            f"export TORCHINDUCTOR_DIR=/tmp/torchinductor_${{USER}}_gpu{slot.gpu_id}; "
+            f"rm -rf $TORCHINDUCTOR_DIR 2>/dev/null; "
             f"export PATH=$HOME/.local/bin:$PATH && "
             f"cd {slot.remote_dir} && "
             f"CUDA_VISIBLE_DEVICES={slot.gpu_id} uv run train.py 2>&1"
