@@ -1,0 +1,18 @@
+# Smoke test — 1 batch, 1 step
+# Usage: bash scripts/run_smoke_test.sh
+
+defaults:
+  - autoresearch_sdpo
+  - _self_
+
+data:
+  train_batch_size: 1
+
+actor_rollout_ref:
+  actor:
+    ppo_mini_batch_size: 1
+
+trainer:
+  experiment_name: qwen3-14b-sdpo-smoke-test
+  total_epochs: 1
+  save_freq: -1
