@@ -373,7 +373,7 @@ def _extract_description(response: str, max_len: int = 80) -> str:
     return "no description"
 
 
-BASELINE_VAL_BPB = 0.9979
+BASELINE_VAL_BPB = 1.056
 
 
 def compute_reward(val_bpb: float | None, best_val_bpb: float = None) -> tuple[float, str, str]:
