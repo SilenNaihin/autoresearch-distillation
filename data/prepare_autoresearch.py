@@ -91,7 +91,7 @@ def split_and_save(rows: list[dict], output_dir: str, train_ratio: float = 0.8):
     random.seed(42)
     random.shuffle(rows)
 
-    split_idx = int(len(rows) * train_ratio)
+    split_idx = max(1, int(len(rows) * train_ratio))
     train_rows = rows[:split_idx]
     test_rows = rows[split_idx:]
 
