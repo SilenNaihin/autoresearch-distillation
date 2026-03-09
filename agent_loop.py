@@ -90,6 +90,11 @@ class AutoresearchAgentLoop(ToolAgentLoop):
 
     async def run(self, sampling_params: dict[str, Any], **kwargs) -> AgentLoopOutput:
         """Override run() to add pre-creation and post-submission logic."""
+        # Reset per-trajectory tool call stats
+        self._total_tool_calls = 0
+        self._failed_tool_calls = 0  # malformed JSON, errors
+        self._noop_tool_calls = 0    # commands that don't touch train.py
+
         # Pre-create persistent bash tool instance
         bash_tool = self.tools.get("bash")
         instance_id = None
@@ -129,6 +134,8 @@ class AutoresearchAgentLoop(ToolAgentLoop):
             return AgentState.TERMINATED
         return state
 
+    _TRAIN_PY_CMDS = ("sed", "cat", "echo", "python", "python3", "printf", "tee", "patch")
+
     async def _call_tool(
         self, tool_call: FunctionCall, tools_kwargs: dict[str, Any], agent_data
     ) -> tuple[ToolResponse, float, dict]:
@@ -142,7 +149,16 @@ class AutoresearchAgentLoop(ToolAgentLoop):
             try:
                 tool_args = json.loads(tool_call.arguments)
             except json.JSONDecodeError:
+                self._failed_tool_calls += 1
+                self._total_tool_calls += 1
                 return ToolResponse(text="Error: invalid JSON in tool arguments"), 0.0, {}
+
+            self._total_tool_calls += 1
+            cmd = tool_args.get("command", "")
+            # Track commands that likely don't modify train.py
+            cmd_stripped = cmd.strip().split()[0] if cmd.strip() else ""
+            if cmd_stripped and cmd_stripped not in self._TRAIN_PY_CMDS and "train.py" not in cmd:
+                self._noop_tool_calls += 1
 
             response, reward, metrics = await bash_tool.execute(
                 instance_id, tool_args, agent_data=agent_data
@@ -183,7 +199,20 @@ class AutoresearchAgentLoop(ToolAgentLoop):
         baseline = Path(bash_tool.autoresearch_dir, "train.py").read_text()
         diff_text = _make_diff(baseline, modified)
 
+        # Build behavioral notes for teacher feedback
+        notes = []
+        if baseline == modified:
+            notes.append("Warning: No changes were made to train.py before submitting.")
+        if self._noop_tool_calls > 0:
+            notes.append(f"Warning: {self._noop_tool_calls} of {self._total_tool_calls} tool calls did not modify train.py.")
+        if self._failed_tool_calls > 0:
+            notes.append(f"Warning: {self._failed_tool_calls} tool calls had malformed arguments.")
+        notes_text = "\n".join(notes)
+
         from environment import compute_reward, parse_metrics
+
+        if baseline == modified:
+            return 0.0, f"Changes:\n{diff_text}\n\n{notes_text}"
 
         # Dispatch to GPU fleet (blocking I/O → run in thread)
         pool = _get_pool()
@@ -204,18 +233,21 @@ class AutoresearchAgentLoop(ToolAgentLoop):
                 parts.append(output.stdout.strip()[-1000:])
             crash_info = "\n".join(parts) if parts else "no output"
             logger.warning(f"Experiment crashed (exit {output.returncode}): {crash_info}")
-            return 0.0, f"Changes:\n{diff_text}\n\nExperiment crashed (exit {output.returncode}):\n{crash_info}"
+            feedback = f"Changes:\n{diff_text}\n\nExperiment crashed (exit {output.returncode}):\n{crash_info}"
+            return 0.0, f"{feedback}\n\n{notes_text}" if notes_text else feedback
         val_bpb = metrics.get("val_bpb")
 
         if val_bpb is None:
             tail = "\n".join(output.stdout.strip().splitlines()[-20:]) if output.stdout else "empty output"
             logger.warning(f"No val_bpb in experiment output. Tail:\n{tail}")
-            return 0.0, f"Changes:\n{diff_text}\n\nExperiment ran but produced no val_bpb metric. Output tail:\n{tail}"
+            feedback = f"Changes:\n{diff_text}\n\nExperiment ran but produced no val_bpb metric. Output tail:\n{tail}"
+            return 0.0, f"{feedback}\n\n{notes_text}" if notes_text else feedback
 
         with self._best_lock:
-            reward, status, feedback = compute_reward(val_bpb, self._best_val_bpb)
+            reward, status, reward_feedback = compute_reward(val_bpb, self._best_val_bpb)
             if status == "improvement" and val_bpb is not None:
                 self._best_val_bpb = val_bpb
 
         logger.info(f"Experiment: val_bpb={val_bpb}, reward={reward:.4f}, status={status}")
-        return reward, f"Changes:\n{diff_text}\n\n{feedback}"
+        feedback = f"Changes:\n{diff_text}\n\n{reward_feedback}"
+        return reward, f"{feedback}\n\n{notes_text}" if notes_text else feedback
