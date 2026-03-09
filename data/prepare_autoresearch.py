@@ -81,8 +81,9 @@ def build_rows(rollouts: list[dict]) -> list[dict]:
             "extra_info": {"index": str(len(rows)), "split": ""},
         })
 
-    # Duplicate rows to fill at least one training batch (train_batch_size=8)
-    MIN_ROWS = 16
+    # Need enough rows so train split (80%) >= train_batch_size (16) after split
+    # ceil(16 / 0.8) = 20
+    MIN_ROWS = 20
     if 0 < len(rows) < MIN_ROWS:
         import copy
         base = rows[:]
