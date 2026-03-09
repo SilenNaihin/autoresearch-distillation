@@ -6,14 +6,15 @@ defaults:
   - sdpo
   - _self_
 
-max_model_len: 40960
+max_model_len: 65536
 
 data:
   train_files: ["${vars.dir}/data/autoresearch/train.parquet"]
   val_files: ["${vars.dir}/data/autoresearch/test.parquet"]
-  train_batch_size: 1
-  max_prompt_length: 32768
-  max_response_length: 8192
+  train_batch_size: 4
+  max_prompt_length: 16384
+  max_response_length: 49152
+  apply_chat_template_kwargs: {"enable_thinking": true}
   return_raw_chat: True
   filter_overlong_prompts: True
   trust_remote_code: True
@@ -24,10 +25,13 @@ actor_rollout_ref:
     path: Qwen/Qwen3-4B
     trust_remote_code: True
     override_config:
-      attn_implementation: sdpa
+      attn_implementation: flash_attention_2
   actor:
     ppo_micro_batch_size_per_gpu: 1
-    ppo_mini_batch_size: 1
+    ppo_mini_batch_size: 4
+    ulysses_sequence_parallel_size: 2
+    fsdp_config:
+      ulysses_sequence_parallel_size: 2
     policy_loss:
       loss_mode: sdpo
     self_distillation:
@@ -55,8 +59,8 @@ actor_rollout_ref:
     name: vllm
     n: 1
     temperature: 0.7
-    tensor_model_parallel_size: 1
-    gpu_memory_utilization: 0.20
+    tensor_model_parallel_size: 2
+    gpu_memory_utilization: 0.70
     max_model_len: ${max_model_len}
     max_num_batched_tokens: ${max_model_len}
     calculate_log_probs: True
@@ -83,6 +87,9 @@ algorithm:
     rollout_is_threshold: 2.0
 
 critic:
+  ulysses_sequence_parallel_size: 2
+  fsdp_config:
+    ulysses_sequence_parallel_size: 2
   model:
     path: Qwen/Qwen3-4B
 
