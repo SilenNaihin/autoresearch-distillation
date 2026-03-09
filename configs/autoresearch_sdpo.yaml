@@ -11,7 +11,7 @@ max_model_len: 65536
 data:
   train_files: ["${vars.dir}/data/autoresearch/train.parquet"]
   val_files: ["${vars.dir}/data/autoresearch/test.parquet"]
-  train_batch_size: 8
+  train_batch_size: 16
   max_prompt_length: 16384
   max_response_length: 49152
   apply_chat_template_kwargs: {"enable_thinking": true}
@@ -28,12 +28,12 @@ actor_rollout_ref:
       attn_implementation: flash_attention_2
   actor:
     ppo_micro_batch_size_per_gpu: 1
-    ppo_mini_batch_size: 8
+    ppo_mini_batch_size: 16
     ulysses_sequence_parallel_size: 2
     strategy: fsdp2
     fsdp_config:
       strategy: fsdp2
-      offload_policy: true
+      offload_policy: false
       ulysses_sequence_parallel_size: 2
     policy_loss:
       loss_mode: sdpo
@@ -69,8 +69,8 @@ actor_rollout_ref:
     calculate_log_probs: True
     multi_turn:
       enable: True
-      max_user_turns: 15
-      max_assistant_turns: 15
+      max_user_turns: 5
+      max_assistant_turns: 5
       max_parallel_calls: 1
       max_tool_response_length: 10000
       tool_response_truncate_side: right
