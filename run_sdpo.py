@@ -36,6 +36,18 @@ def _patched_compute_data_metrics(batch, use_critic=True):
         metrics[f"env/{short}/max"] = max(valid)
         metrics[f"env/{short}/min"] = min(valid)
 
+    # Log feedback strings as a wandb table
+    feedback = ntb.get("feedback")
+    if feedback is not None:
+        try:
+            import wandb
+            if wandb.run is not None:
+                rows = [[i, str(f)[:2000]] for i, f in enumerate(feedback)]
+                table = wandb.Table(columns=["sample_idx", "feedback"], data=rows)
+                wandb.log({"rollout/feedback": table}, commit=False)
+        except Exception:
+            pass
+
     return metrics
 
 

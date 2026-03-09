@@ -163,6 +163,10 @@ class AutoresearchAgentLoop(ToolAgentLoop):
         pool = _get_pool()
         output = await asyncio.to_thread(pool.run, modified)
 
+        # Parse whatever metrics are available (even on crash, stdout may have partial output)
+        metrics = parse_metrics(output.stdout) if output.stdout else {}
+        self._last_env_metrics = metrics
+
         if output.returncode != 0:
             # Combine stderr and stdout tail for maximum crash context.
             # Remote cmd uses 2>&1, so experiment errors are in stdout;
@@ -175,9 +179,6 @@ class AutoresearchAgentLoop(ToolAgentLoop):
             crash_info = "\n".join(parts) if parts else "no output"
             logger.warning(f"Experiment crashed (exit {output.returncode}): {crash_info}")
             return 0.0, f"Experiment crashed (exit {output.returncode}):\n{crash_info}"
-
-        metrics = parse_metrics(output.stdout)
-        self._last_env_metrics = metrics
         val_bpb = metrics.get("val_bpb")
 
         if val_bpb is None:
