@@ -17,19 +17,17 @@ The training budget is fixed at 5 minutes wall-clock. Lower val_bpb is better.
 pandas, pyarrow, requests, rustbpe, tiktoken.
 - Do not modify the evaluation harness. The evaluate_bpb function in prepare.py is the ground truth.
 - VRAM is a soft constraint. Some increase is OK for meaningful val_bpb gains.
-- Simpler is better. A small improvement that adds ugly complexity is not worth it.
-- The script runs on a single GPU via: uv run train.py
 
 ## Workflow
-1. Read train.py to understand the current implementation
-2. Make targeted modifications using bash commands (sed, cat heredoc, python scripts, etc.)
+1. Think step-by-step about what changes could lower val_bpb (architecture, hyperparameters, optimization, etc.)
+2. Make modifications using bash commands (sed, cat heredoc, python scripts, etc.)
 3. Verify your changes by reading the modified file
 4. When satisfied, submit: echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT
 
 ## Important
 - You are ONLY editing the file. You do NOT run experiments.
 - We will run uv run train.py on a GPU after you submit.
-- Focus on making correct, clean edits.\
+- Think carefully about what will improve training, then make correct edits.\
 """
 
 
@@ -45,7 +43,8 @@ def build_instance_prompt(train_py_content: str, history_lines: list[str]) -> st
             "Build on ideas that improved val_bpb."
         )
     parts.append(
-        "Make a single focused change to train.py to lower val_bpb. "
+        "Prefer a single focused change to train.py to lower val_bpb, "
+        "but you may combine related changes if they work together. "
         "You must apply your changes directly using the bash tool — do not just output a diff."
     )
     return "\n\n".join(parts)
