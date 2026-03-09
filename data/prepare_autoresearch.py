@@ -107,7 +107,7 @@ def split_and_save(rows: list[dict], output_dir: str, train_ratio: float = 0.8):
         return pa.table({
             "data_source": [r["data_source"] for r in rows],
             "agent_name": [r["agent_name"] for r in rows],
-            "prompt": [json.dumps(r["prompt"]) for r in rows],
+            "prompt": [r["prompt"] for r in rows],
             "reward_model": [json.dumps(r["reward_model"]) for r in rows],
             "extra_info": [r["extra_info"] for r in rows],
         })
