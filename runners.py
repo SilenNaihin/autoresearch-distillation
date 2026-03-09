@@ -40,8 +40,8 @@ class GPUSlot:
 # box3 reserved for vLLM inference, not available for experiments.
 # Each GPU gets its own remote_dir to avoid file races on 2-GPU boxes.
 FLEET = [
-    # h100-dev-box: 1x H100 NVL
-    GPUSlot("h100_azure",      "0", "box1-gpu0", "~/autoresearch"),
+    # h100-dev-box: 1x H100 NVL — down as of 2026-03-09
+    # GPUSlot("h100_azure",      "0", "box1-gpu0", "~/autoresearch"),
     # h100-dev-box-2: 1x H100 NVL
     GPUSlot("h100-dev-box-2",  "0", "box2-gpu0", "~/autoresearch"),
     # h100-dev-box-4: 2x H100 — separate dirs per GPU
