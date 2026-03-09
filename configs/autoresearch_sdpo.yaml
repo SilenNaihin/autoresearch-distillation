@@ -30,9 +30,10 @@ actor_rollout_ref:
     ppo_micro_batch_size_per_gpu: 1
     ppo_mini_batch_size: 8
     ulysses_sequence_parallel_size: 2
+    strategy: fsdp2
     fsdp_config:
-      param_offload: true
-      optimizer_offload: true
+      strategy: fsdp2
+      offload_policy: true
       ulysses_sequence_parallel_size: 2
     policy_loss:
       loss_mode: sdpo
@@ -89,8 +90,10 @@ algorithm:
     rollout_is_threshold: 2.0
 
 critic:
+  strategy: fsdp2
   ulysses_sequence_parallel_size: 2
   fsdp_config:
+    strategy: fsdp2
     ulysses_sequence_parallel_size: 2
   model:
     path: Qwen/Qwen3-32B
