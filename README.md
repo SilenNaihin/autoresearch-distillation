@@ -103,7 +103,7 @@ autoresearch-distillation/
 
 ### 1. Collect rollouts (multi-turn loop)
 
-Uses Qwen3-32B via vLLM + mini-swe-agent for multi-turn bash editing. The model reads `train.py`, makes edits, verifies them, and submits. Produces `rollouts/rollouts.jsonl`.
+Uses Qwen3-14B via vLLM + mini-swe-agent for multi-turn bash editing. The model reads `train.py`, makes edits, verifies them, and submits. Produces `rollouts/rollouts.jsonl`.
 
 ```bash
 # Start vLLM on GPU 0, experiments dispatched to GPU fleet
@@ -130,7 +130,7 @@ bash scripts/run_training.sh
 
 ### Key config (`configs/autoresearch_sdpo.yaml`)
 
-- **Model**: Qwen/Qwen3-32B
+- **Model**: Qwen/Qwen3-14B
 - **Training GPUs**: 2 (colocated vLLM + FSDP2 with CPU offloading)
 - **Experiment GPUs**: 6 (remote, via SSH)
 - **Rollouts per batch**: 8
