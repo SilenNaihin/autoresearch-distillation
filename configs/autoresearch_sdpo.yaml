@@ -22,7 +22,7 @@ data:
 
 actor_rollout_ref:
   model:
-    path: Qwen/Qwen3-32B
+    path: Qwen/Qwen3-14B
     trust_remote_code: True
     override_config:
       attn_implementation: flash_attention_2
@@ -96,7 +96,7 @@ critic:
     strategy: fsdp2
     ulysses_sequence_parallel_size: 2
   model:
-    path: Qwen/Qwen3-32B
+    path: Qwen/Qwen3-14B
 
 custom_reward_function:
   path: ${vars.dir}/reward.py
@@ -106,7 +106,7 @@ reward_model:
 
 trainer:
   project_name: autoresearch-sdpo
-  experiment_name: qwen3-32b-sdpo
+  experiment_name: qwen3-14b-sdpo
   n_gpus_per_node: 2
   nnodes: 1
   total_epochs: 30
