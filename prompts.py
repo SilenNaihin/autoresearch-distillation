@@ -44,11 +44,8 @@ def build_instance_prompt(train_py_content: str, history_lines: list[str]) -> st
             "Learn from past experiments. Don't repeat things that didn't work. "
             "Build on ideas that improved val_bpb."
         )
-    else:
-        parts.append("No experiments have been run yet. This is the baseline train.py.")
-
     parts.append(
-        "Modify train.py to lower val_bpb. "
-        "Use bash commands to edit the file, then submit when done."
+        "Make a single focused change to train.py to lower val_bpb. "
+        "You must apply your changes directly using the bash tool — do not just output a diff."
     )
     return "\n\n".join(parts)
