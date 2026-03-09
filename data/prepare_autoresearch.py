@@ -35,34 +35,12 @@ def load_rollouts(path: str) -> list[dict]:
     return rollouts
 
 
-def _clean_user_message(content: str) -> str:
-    """Clean up user message for tool-based agent loop training."""
-    # Remove stale context that conflicts with teacher reprompting
-    content = content.replace(
-        "No experiments have been run yet. This is the baseline train.py.\n\n", ""
-    )
-    content = content.replace(
-        "No experiments have been run yet. This is the baseline train.py.", ""
-    )
-    # Replace diff-oriented instructions with tool-use instructions
-    content = content.replace(
-        "Propose a single modification to train.py that you think will lower val_bpb. "
-        "Output your reasoning followed by a unified diff.",
-        "Make a single focused change to train.py to lower val_bpb. "
-        "You must apply your changes directly using the bash tool — do not just output a diff.",
-    )
-    return content.strip()
-
-
 def extract_prompt(rollout: dict) -> list[dict]:
     """Extract first 2 turns (system + user) as the prompt."""
     conversations = rollout["conversations"]
     prompt = []
     for msg in conversations[:2]:
-        content = msg["content"]
-        if msg["role"] == "user":
-            content = _clean_user_message(content)
-        prompt.append({"role": msg["role"], "content": content})
+        prompt.append({"role": msg["role"], "content": msg["content"]})
     return prompt
 
 
