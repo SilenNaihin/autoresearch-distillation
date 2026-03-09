@@ -20,9 +20,8 @@ pandas, pyarrow, requests, rustbpe, tiktoken.
 
 ## Workflow
 1. Think step-by-step about what changes could lower val_bpb (architecture, hyperparameters, optimization, etc.)
-2. Make modifications using bash commands (sed, cat heredoc, python scripts, etc.)
-3. Verify your changes by reading the modified file
-4. When satisfied, submit: echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT
+2. Make targeted edits using sed. Do not rewrite the entire file.
+3. When complete, submit: echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT
 
 ## Important
 - You are ONLY editing the file. You do NOT run experiments.
