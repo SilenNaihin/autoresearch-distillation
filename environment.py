@@ -373,33 +373,17 @@ def _extract_description(response: str, max_len: int = 80) -> str:
     return "no description"
 
 
-def compute_reward(val_bpb: float | None, best_val_bpb: float) -> tuple[float, str, str]:
-    """Compute reward from val_bpb relative to best seen so far.
+BASELINE_VAL_BPB = 0.9979
 
-    Returns (reward, status, feedback).
-    """
+
+def compute_reward(val_bpb: float | None, best_val_bpb: float = None) -> tuple[float, str, str]:
+    """Reward = max(0, baseline - val_bpb). Failures get 0."""
     if val_bpb is None:
-        return -1.0, "crash", "No val_bpb in output."
-
-    # First successful run (best_val_bpb is inf): give a moderate positive reward
-    if best_val_bpb == float("inf"):
-        status = "improvement"
-        feedback = f"FIRST RESULT: val_bpb={val_bpb:.6f} (baseline established)."
-        return 1.0, status, feedback
-
-    if val_bpb < best_val_bpb:
-        delta = best_val_bpb - val_bpb  # positive = better
-        reward = min(delta * 100, 10.0)  # cap reward at 10.0
-        status = "improvement"
-        feedback = (f"SUCCESS: val_bpb={val_bpb:.6f} (new best). "
-                    f"Previous best: {best_val_bpb:.6f}, delta: -{delta:.6f}.")
-    else:
-        delta = val_bpb - best_val_bpb  # positive = worse
-        reward = max(-delta * 50, -5.0)  # floor reward at -5.0
-        status = "no_improvement"
-        feedback = (f"NO IMPROVEMENT: val_bpb={val_bpb:.6f}, best={best_val_bpb:.6f}. "
-                    f"Try something different.")
-    return reward, status, feedback
+        return 0.0, "crash", "No val_bpb in output."
+    reward = max(0.0, BASELINE_VAL_BPB - val_bpb)
+    if reward > 0:
+        return reward, "improvement", f"val_bpb={val_bpb:.6f} (baseline={BASELINE_VAL_BPB}, improved by {reward:.6f})"
+    return 0.0, "no_improvement", f"val_bpb={val_bpb:.6f} (baseline={BASELINE_VAL_BPB}, no improvement)"
 
 
 def _tail(text: str, n: int) -> str:

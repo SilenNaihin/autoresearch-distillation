@@ -17,7 +17,7 @@ if [ -f "$PROJECT_ROOT/.env" ]; then
 fi
 
 # Defaults
-EXPERIMENT_NAME="${1:-qwen3-4b-sdpo}"
+EXPERIMENT_NAME="${1:-qwen3-32b-sdpo}"
 
 export RAY_TMPDIR=/data/tmp
 export TMPDIR=/data/tmp
@@ -69,8 +69,8 @@ echo "============================================"
 # Shift past the experiment name if provided
 shift 2>/dev/null || true
 
-$PYTHON -m verl.trainer.main_ppo \
+$PYTHON "$PROJECT_ROOT/run_sdpo.py" \
     --config-name "$CONFIG_NAME" \
     vars.dir="$PROJECT_ROOT" \
-    vars.ckpt_dir="$PROJECT_ROOT/checkpoints" \
+    vars.ckpt_dir="/data/checkpoints" \
     "$@"
