@@ -21,6 +21,9 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, PROJECT_ROOT)
+from prompts import SYSTEM_PROMPT, build_instance_prompt
+
 ROLLOUT_FILE = os.path.join(PROJECT_ROOT, "rollouts", "rollouts.jsonl")
 OUTPUT_DIR = os.path.join(PROJECT_ROOT, "data", "autoresearch")
 
@@ -35,13 +38,21 @@ def load_rollouts(path: str) -> list[dict]:
     return rollouts
 
 
+def extract_train_py(rollout: dict) -> str:
+    """Extract train.py content from the user message in a rollout."""
+    user_msg = rollout["conversations"][1]["content"]
+    start = user_msg.find("```python\n") + len("```python\n")
+    end = user_msg.find("\n```", start)
+    return user_msg[start:end]
+
+
 def extract_prompt(rollout: dict) -> list[dict]:
-    """Extract first 2 turns (system + user) as the prompt."""
-    conversations = rollout["conversations"]
-    prompt = []
-    for msg in conversations[:2]:
-        prompt.append({"role": msg["role"], "content": msg["content"]})
-    return prompt
+    """Build prompt from prompts.py using train.py content from rollout."""
+    train_py = extract_train_py(rollout)
+    return [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": build_instance_prompt(train_py, [])},
+    ]
 
 
 def prompt_key(prompt: list[dict]) -> str:
