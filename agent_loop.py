@@ -150,12 +150,12 @@ class AutoresearchAgentLoop(ToolAgentLoop):
         self-distillation pipeline via extra_fields["reward_extra_info"]["feedback"].
         """
         if bash_tool is None or instance_id is None:
-            return -1.0, "No bash tool or instance available."
+            return 0.0, "No bash tool or instance available."
 
         modified = bash_tool.read_train_py(instance_id)
         if modified is None:
             logger.warning(f"No modified train.py found for instance {instance_id}")
-            return -1.0, "No modified train.py found."
+            return 0.0, "No modified train.py found."
 
         from environment import compute_reward, parse_metrics
 
@@ -174,7 +174,7 @@ class AutoresearchAgentLoop(ToolAgentLoop):
                 parts.append(output.stdout.strip()[-1000:])
             crash_info = "\n".join(parts) if parts else "no output"
             logger.warning(f"Experiment crashed (exit {output.returncode}): {crash_info}")
-            return -1.0, f"Experiment crashed (exit {output.returncode}):\n{crash_info}"
+            return 0.0, f"Experiment crashed (exit {output.returncode}):\n{crash_info}"
 
         metrics = parse_metrics(output.stdout)
         self._last_env_metrics = metrics
@@ -183,7 +183,7 @@ class AutoresearchAgentLoop(ToolAgentLoop):
         if val_bpb is None:
             tail = "\n".join(output.stdout.strip().splitlines()[-20:]) if output.stdout else "empty output"
             logger.warning(f"No val_bpb in experiment output. Tail:\n{tail}")
-            return -1.0, f"Experiment ran but produced no val_bpb metric. Output tail:\n{tail}"
+            return 0.0, f"Experiment ran but produced no val_bpb metric. Output tail:\n{tail}"
 
         with self._best_lock:
             reward, status, feedback = compute_reward(val_bpb, self._best_val_bpb)

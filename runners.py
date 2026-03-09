@@ -133,14 +133,39 @@ class GPUPoolRunner:
 
     Uses file-based locking (fcntl.flock) for cross-process safety.
     Multiple Ray workers can safely share GPU slots without collisions.
+
+    Dead-box detection: if a slot fails with SSH errors (exit 255),
+    it's marked dead for DEAD_COOLDOWN seconds. The next run() call
+    skips dead slots and retries on a different one.
     """
 
     LOCK_DIR = "/data/tmp/gpu_locks"
+    DEAD_COOLDOWN = 300  # 5 minutes before retrying a dead box
+
+    # Shared across all instances in the same process
+    _dead_until: dict[str, float] = {}
+    _dead_lock = threading.Lock()
 
     def __init__(self, slots: list[GPUSlot] | None = None, timeout: int = 600):
         self.slots = slots or list(FLEET)
         self.timeout = timeout
         os.makedirs(self.LOCK_DIR, exist_ok=True)
+
+    def _is_dead(self, slot: GPUSlot) -> bool:
+        import time
+        with self._dead_lock:
+            deadline = self._dead_until.get(slot.name, 0)
+            if time.time() < deadline:
+                return True
+            # Expired — remove
+            self._dead_until.pop(slot.name, None)
+            return False
+
+    def _mark_dead(self, slot: GPUSlot):
+        import time
+        with self._dead_lock:
+            self._dead_until[slot.name] = time.time() + self.DEAD_COOLDOWN
+            print(f"[pool] {slot.name} marked dead for {self.DEAD_COOLDOWN}s")
 
     def run(self, train_py: str) -> RunOutput:
         slot, lock_fd = self._acquire_slot()
@@ -148,6 +173,26 @@ class GPUPoolRunner:
             print(f"[pool] {slot.name} <- dispatching")
             runner = SSHRunner(slot, timeout=self.timeout)
             result = runner.run(train_py)
+
+            # SSH-level failure → mark dead, retry on another slot
+            if result.returncode == 255 or "Connection timed out" in result.stderr:
+                self._mark_dead(slot)
+                self._release_slot(lock_fd)
+                # Retry once on a different slot
+                slot2, lock_fd2 = self._acquire_slot()
+                try:
+                    print(f"[pool] {slot2.name} <- retrying (after {slot.name} SSH fail)")
+                    runner2 = SSHRunner(slot2, timeout=self.timeout)
+                    result = runner2.run(train_py)
+                    if result.returncode == 255 or "Connection timed out" in result.stderr:
+                        self._mark_dead(slot2)
+                    status = "ok" if result.returncode == 0 else f"exit {result.returncode}"
+                    print(f"[pool] {slot2.name} -> done ({status})")
+                    return result
+                finally:
+                    self._release_slot(lock_fd2)
+                return result
+
             status = "ok" if result.returncode == 0 else f"exit {result.returncode}"
             print(f"[pool] {slot.name} -> done ({status})")
             return result
@@ -155,11 +200,13 @@ class GPUPoolRunner:
             self._release_slot(lock_fd)
 
     def _acquire_slot(self) -> tuple[GPUSlot, int]:
-        """Acquire an exclusive lock on an available GPU slot."""
+        """Acquire an exclusive lock on an available GPU slot, skipping dead boxes."""
         import fcntl
         import time
         while True:
             for slot in self.slots:
+                if self._is_dead(slot):
+                    continue
                 lock_path = os.path.join(self.LOCK_DIR, f"{slot.name}.lock")
                 lock_fd = open(lock_path, "w")
                 try:
