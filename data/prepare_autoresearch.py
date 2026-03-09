@@ -109,7 +109,7 @@ def split_and_save(rows: list[dict], output_dir: str, train_ratio: float = 0.8):
             "agent_name": [r["agent_name"] for r in rows],
             "prompt": [json.dumps(r["prompt"]) for r in rows],
             "reward_model": [json.dumps(r["reward_model"]) for r in rows],
-            "extra_info": [json.dumps(r["extra_info"]) for r in rows],
+            "extra_info": [r["extra_info"] for r in rows],
         })
 
     if train_rows:
