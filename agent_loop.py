@@ -83,10 +83,11 @@ class AutoresearchAgentLoop(ToolAgentLoop):
       3. Compute reward from experiment results
     """
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, behavioral_feedback: bool = False, **kwargs):
         super().__init__(*args, **kwargs)
         self._best_val_bpb = float("inf")
         self._best_lock = threading.Lock()
+        self._behavioral_feedback = behavioral_feedback
 
     async def run(self, sampling_params: dict[str, Any], **kwargs) -> AgentLoopOutput:
         """Override run() to add pre-creation and post-submission logic."""
@@ -199,15 +200,17 @@ class AutoresearchAgentLoop(ToolAgentLoop):
         baseline = Path(bash_tool.autoresearch_dir, "train.py").read_text()
         diff_text = _make_diff(baseline, modified)
 
-        # Build behavioral notes for teacher feedback
-        notes = []
-        if baseline == modified:
-            notes.append("Warning: No changes were made to train.py before submitting.")
-        if self._noop_tool_calls > 0:
-            notes.append(f"Warning: {self._noop_tool_calls} of {self._total_tool_calls} tool calls did not modify train.py.")
-        if self._failed_tool_calls > 0:
-            notes.append(f"Warning: {self._failed_tool_calls} tool calls had malformed arguments.")
-        notes_text = "\n".join(notes)
+        # Build behavioral notes for teacher feedback (gated by config)
+        notes_text = ""
+        if self._behavioral_feedback:
+            notes = []
+            if baseline == modified:
+                notes.append("Warning: No changes were made to train.py before submitting.")
+            if self._noop_tool_calls > 0:
+                notes.append(f"Warning: {self._noop_tool_calls} of {self._total_tool_calls} tool calls did not modify train.py.")
+            if self._failed_tool_calls > 0:
+                notes.append(f"Warning: {self._failed_tool_calls} tool calls had malformed arguments.")
+            notes_text = "\n".join(notes)
 
         from environment import compute_reward, parse_metrics
 
