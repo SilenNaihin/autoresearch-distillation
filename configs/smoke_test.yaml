@@ -18,6 +18,8 @@ actor_rollout_ref:
       ulysses_sequence_parallel_size: 1
   rollout:
     tensor_model_parallel_size: 1
+    agent:
+      num_workers: 1
 
 critic:
   model:
