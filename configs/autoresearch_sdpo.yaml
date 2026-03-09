@@ -59,7 +59,7 @@ actor_rollout_ref:
     name: vllm
     n: 1
     temperature: 0.7
-    tensor_model_parallel_size: 2
+    tensor_model_parallel_size: 1
     gpu_memory_utilization: 0.70
     max_model_len: ${max_model_len}
     max_num_batched_tokens: ${max_model_len}
