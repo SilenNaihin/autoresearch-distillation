@@ -33,7 +33,7 @@ actor_rollout_ref:
     strategy: fsdp2
     fsdp_config:
       strategy: fsdp2
-      offload_policy: false
+      offload_policy: true
       ulysses_sequence_parallel_size: 2
     policy_loss:
       loss_mode: sdpo
