@@ -39,14 +39,10 @@ def _patched_compute_data_metrics(batch, use_critic=True):
     # Log feedback strings as a wandb table
     feedback = ntb.get("feedback")
     if feedback is not None:
-        try:
-            import wandb
-            if wandb.run is not None:
-                rows = [[i, str(f)[:2000]] for i, f in enumerate(feedback)]
-                table = wandb.Table(columns=["sample_idx", "feedback"], data=rows)
-                wandb.log({"rollout/feedback": table}, commit=False)
-        except Exception:
-            pass
+        import wandb
+        rows = [[i, str(f)] for i, f in enumerate(feedback)]
+        table = wandb.Table(columns=["sample_idx", "feedback"], data=rows)
+        wandb.log({"rollout/feedback": table}, commit=False)
 
     return metrics
 
@@ -67,31 +63,22 @@ def _patched_build_sd(self, batch, reward_tensor, reward_extra_infos_dict=None):
     sd_batch, sd_metrics = result
 
     # Decode teacher reprompt prefixes and log as wandb table
-    try:
-        import wandb
+    import wandb
 
-        if wandb.run is None:
-            return result
+    teacher_ids = sd_batch.batch["teacher_input_ids"]
+    response_len = batch.batch["responses"].shape[1]
+    reprompt_len = teacher_ids.shape[1] - response_len
 
-        teacher_ids = sd_batch.batch["teacher_input_ids"]
-        # reprompt_len = total teacher seq len minus response len
-        response_len = batch.batch["responses"].shape[1]
-        reprompt_len = teacher_ids.shape[1] - response_len
+    num_samples = min(3, teacher_ids.shape[0])
+    rows = []
+    for i in range(num_samples):
+        prefix_ids = teacher_ids[i, :reprompt_len]
+        prefix_ids = prefix_ids[prefix_ids != 0]
+        text = self.tokenizer.decode(prefix_ids, skip_special_tokens=False)
+        rows.append([i, text])
 
-        num_samples = min(3, teacher_ids.shape[0])
-        rows = []
-        for i in range(num_samples):
-            prefix_ids = teacher_ids[i, :reprompt_len]
-            # Strip padding (0s)
-            prefix_ids = prefix_ids[prefix_ids != 0]
-            text = self.tokenizer.decode(prefix_ids, skip_special_tokens=False)
-            # Truncate for display
-            rows.append([i, text[:2000]])
-
-        table = wandb.Table(columns=["sample_idx", "reprompt_text"], data=rows)
-        wandb.log({"self_distillation/reprompt_samples": table}, step=self.global_steps)
-    except Exception:
-        pass  # Don't break training for logging failures
+    table = wandb.Table(columns=["sample_idx", "reprompt_text"], data=rows)
+    wandb.log({"self_distillation/reprompt_samples": table}, step=self.global_steps)
 
     return result
 
