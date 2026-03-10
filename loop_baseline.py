@@ -32,10 +32,11 @@ import wandb
 from bash_tool import create_isolated_workdir, run_agent_episode
 from environment import BASELINE_VAL_BPB, compute_reward, parse_metrics
 from prompts import SYSTEM_PROMPT, build_instance_prompt
-from runners import FLEET, SSHRunner
+from runners import GPUSlot, SSHRunner
 
 # Experiments run on box1 H100 — inference on A100 via remote vLLM.
-EXPERIMENT_FLEET = [s for s in FLEET if s.name == "box1-gpu0"]
+# box1 is commented out of the shared FLEET (reserved for SDPO), so we define it here.
+EXPERIMENT_FLEET = [GPUSlot("h100_azure", "0", "box1-gpu0", "~/autoresearch")]
 
 MODEL = "Qwen/Qwen3-14B"
 VLLM_BASE_URL = "http://20.125.45.203:8000/v1"
