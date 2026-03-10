@@ -110,6 +110,19 @@ class AutoresearchAgentLoop(ToolAgentLoop):
             # Run the standard ToolAgentLoop state machine
             output = await super().run(sampling_params, **kwargs)
 
+            # Detect empty chain of thought (e.g. "<think>\n</think>")
+            self._empty_thinking = False
+            try:
+                # Decode just the first 50 tokens to check for thinking
+                prefix = self.tokenizer.decode(output.response_ids[:50], skip_special_tokens=False)
+                think_start = prefix.find("<think>")
+                think_end = prefix.find("</think>")
+                if think_start >= 0 and think_end > think_start:
+                    think_content = prefix[think_start + len("<think>"):think_end].strip()
+                    self._empty_thinking = len(think_content) < 20
+            except Exception:
+                pass
+
             # Post-submission: dispatch experiment to GPU fleet
             reward, feedback = await self._dispatch_experiment(bash_tool, instance_id)
             output.reward_score = reward
@@ -210,6 +223,8 @@ class AutoresearchAgentLoop(ToolAgentLoop):
                 notes.append(f"Warning: {self._noop_tool_calls} of {self._total_tool_calls} tool calls did not modify train.py.")
             if self._failed_tool_calls > 0:
                 notes.append(f"Warning: {self._failed_tool_calls} tool calls had malformed arguments.")
+            if self._empty_thinking:
+                notes.append("Warning: You did not use chain of thought. You must reason step-by-step inside <think> tags before making changes.")
             notes_text = "\n".join(notes)
 
         from environment import compute_reward, parse_metrics
