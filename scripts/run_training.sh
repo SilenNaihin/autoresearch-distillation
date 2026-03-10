@@ -46,7 +46,7 @@ unset VLLM_ATTENTION_BACKEND
 # Set ulimit
 ulimit -c 0
 
-# Patch HF cached config.json to add YaRN rope_scaling for 64k context
+# Patch HF cached config.json to add YaRN rope_scaling for 128k context
 # (veRL's update_model_config crashes on rope_scaling=None, so we patch on disk)
 $PYTHON -c "
 import json, glob, os
@@ -54,7 +54,7 @@ for p in glob.glob(os.path.expanduser('~/.cache/huggingface/hub/models--Qwen--Qw
     real = os.path.realpath(p)
     with open(real) as f: c = json.load(f)
     if c.get('rope_scaling') is None:
-        c['rope_scaling'] = {'rope_type': 'yarn', 'factor': 2.0, 'original_max_position_embeddings': 32768}
+        c['rope_scaling'] = {'rope_type': 'yarn', 'factor': 4.0, 'original_max_position_embeddings': 32768}
         with open(real, 'w') as f: json.dump(c, f, indent=2)
         print(f'Patched rope_scaling in {real}')
     else:
@@ -88,4 +88,5 @@ $PYTHON "$PROJECT_ROOT/run_sdpo.py" \
     --config-name "$CONFIG_NAME" \
     vars.dir="$PROJECT_ROOT" \
     vars.ckpt_dir="/data/checkpoints" \
+    'actor_rollout_ref.rollout.engine_kwargs.vllm.hf_overrides.max_position_embeddings=${max_model_len}' \
     "$@"
