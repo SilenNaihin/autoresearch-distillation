@@ -11,8 +11,8 @@ Built on [Karpathy's autoresearch](https://github.com/karpathy/autoresearch) and
 │                     SDPO TRAINING LOOP                           │
 │                                                                  │
 │   1. Model receives prompt (train.py + experiment history)       │
-│   2. Model edits train.py via bash tool (multi-turn)             │
-│   3. Model submits when satisfied with changes                   │
+│   2. Model thinks step-by-step, then edits train.py via sed      │
+│   3. Model submits: echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT   │
 │   4. Modified train.py dispatched to a remote H100 via SSH       │
 │   5. uv run train.py executes (5 min fixed budget)               │
 │   6. val_bpb parsed → reward signal computed                     │
@@ -24,28 +24,25 @@ Built on [Karpathy's autoresearch](https://github.com/karpathy/autoresearch) and
 └──────────────────────────────────────────────────────────────────┘
 ```
 
-The model sees `train.py` + experiment history, uses bash commands to read and edit the file in an isolated workdir, and submits when satisfied. The modified script is dispatched to a GPU for evaluation, and the model gets a scalar reward based on whether `val_bpb` improved. SDPO (Self-Distillation Policy Optimization) uses the model's own successful rollouts as the teacher signal — no separate reward model or critic needed.
+The model sees `train.py`, uses bash commands (primarily `sed`) to make targeted edits in an isolated workdir, and submits when complete. The modified script is dispatched to a GPU for evaluation, and the model gets a scalar reward based on whether `val_bpb` improved. SDPO (Self-Distillation Policy Optimization) uses the model's own successful rollouts as the teacher signal — no separate reward model or critic needed.
 
-The multi-turn editing approach (via [mini-swe-agent](https://github.com/SWE-agent/mini-swe-agent)) lets the model verify its changes before submission, recovering from malformed edits that would fail silently in a single-turn diff-based approach.
+Chain-of-thought is enabled (`enable_thinking: true`), so the model reasons in `<think>` blocks before acting.
 
 ## Architecture
 
 ```
 box3 (h100-dev-box-3)           — vLLM inference + FSDP2 training (2 GPUs)
-box1, box2, box4, box5          — experiment execution (6 H100s total)
+box2, box4, box5                — experiment execution (5 H100s total)
 ```
 
 **VERL** (via SDPO fork) handles the RL training loop: rollout generation, advantage estimation, policy updates. Our custom `AutoresearchAgentLoop` extends VERL's `ToolAgentLoop` — the model uses a bash tool to edit `train.py` across multiple turns, then the modified script is dispatched to a GPU and the experiment reward flows back into training. Tool response tokens are masked (`response_mask=0`), so we only train on the model's decisions.
 
-**ExperimentEnvironment** handles prompt construction, diff extraction, patch application, experiment dispatch (via `GPUPoolRunner`), metric parsing, and reward computation. (Used by the legacy single-turn `loop.py`; the multi-turn `loop_swe.py` calls these components directly.)
-
-**GPUPoolRunner** manages 6 remote H100s via SSH. Thread-safe — multiple experiments run in parallel automatically.
+**GPUPoolRunner** manages 5 remote H100s via SSH. Thread-safe with file-based locking — multiple VERL workers dispatch experiments concurrently.
 
 ## GPU Fleet
 
 | Slot | Host | GPU | Role |
 |------|------|-----|------|
-| box1-gpu0 | h100_azure | 0 | Experiment |
 | box2-gpu0 | h100-dev-box-2 | 0 | Experiment |
 | box3 | h100-dev-box-3 | 0,1 | vLLM + FSDP2 (VERL) |
 | box4-gpu0 | h100-dev-box-4 | 0 | Experiment |
@@ -55,13 +52,13 @@ box1, box2, box4, box5          — experiment execution (6 H100s total)
 
 ## Reward Structure
 
-Reward is computed against a hardcoded baseline (`BASELINE_VAL_BPB = 0.9979`):
+Reward is computed against a hardcoded baseline (`BASELINE_VAL_BPB = 1.056`):
 
 | Status | Reward | When |
 |--------|--------|------|
-| improvement | `max(0, 0.9979 - val_bpb)` | val_bpb below baseline |
+| improvement | `max(0, 1.056 - val_bpb)` | val_bpb below baseline |
 | no_improvement | `0.0` | val_bpb at or above baseline |
-| crash / patch_error / parse_error | `0.0` | any failure mode |
+| crash | `0.0` | any failure mode |
 
 No negative rewards. The SDPO `success_reward_threshold` is set to `0.0`, so any rollout that beats baseline is treated as a "success" for self-distillation.
 
@@ -70,23 +67,23 @@ No negative rewards. The SDPO `success_reward_threshold` is set to `0.0`, so any
 ```
 autoresearch-distillation/
 ├── agent_loop.py              # VERL agent loop — extends ToolAgentLoop for multi-turn bash editing
-├── bash_tool.py               # Isolated workdir, mini-swe-agent runner, VERL BashTool
-├── environment.py             # ExperimentEnvironment — prompt, diff, patch, reward logic
-├── runners.py                 # GPUPoolRunner — SSH dispatch to 6 remote H100s
-├── prompts.py                 # Shared prompt templates for bash-tool editing
-├── loop_swe.py                # Multi-turn data collection loop (mini-swe-agent + vLLM)
-├── loop.py                    # Legacy single-turn data collection loop (diff-based)
-│
-├── run_sdpo.py               # Entry point — monkey-patches SDPO trainer for env metrics + reprompt logging
+├── bash_tool.py               # VERL BashTool — isolated workdir + bash execution
+├── environment.py             # RunOutput, parse_metrics(), compute_reward()
+├── runners.py                 # GPUPoolRunner — SSH dispatch to 5 remote H100s
+├── prompts.py                 # System prompt + instance prompt builder
+├── reward.py                  # Passthrough reward function for VERL
+├── run_sdpo.py                # Entry point — patches SDPO trainer for env metrics + reprompt logging
 │
 ├── configs/
-│   ├── autoresearch_sdpo.yaml # Hydra config for SDPO training (multi-turn enabled)
+│   ├── autoresearch_sdpo.yaml # Hydra config for SDPO training
+│   ├── smoke_test.yaml        # 1-step smoke test config (Qwen3-4B)
 │   ├── bash_tool_config.yaml  # VERL tool config for bash tool
 │   └── agent_loops.yaml       # Agent loop registry (autoresearch_agent)
 ├── data/
 │   └── prepare_autoresearch.py # Convert rollouts.jsonl → parquet for SDPO
 ├── scripts/
 │   ├── run_training.sh        # Launch SDPO training
+│   ├── run_smoke_test.sh      # 1-step end-to-end verification
 │   ├── setup_gpu_box.sh       # Bootstrap a GPU box
 │   └── smoke_test.sh          # Verify GPU box setup
 │
@@ -94,25 +91,13 @@ autoresearch-distillation/
 ├── SDPO/                      # SDPO/VERL fork — submodule
 ├── rollouts/                  # Collected rollouts (rollouts.jsonl)
 │
-├── INTEGRATION.md             # Environment/runner API docs
 ├── test_e2e.py                # End-to-end fleet verification
 └── test_runner.py             # Runner unit tests
 ```
 
 ## Usage
 
-### 1. Collect rollouts (multi-turn loop)
-
-Uses Qwen3-14B via vLLM + mini-swe-agent for multi-turn bash editing. The model reads `train.py`, makes edits, verifies them, and submits. Produces `rollouts/rollouts.jsonl`.
-
-```bash
-# Start vLLM on GPU 0, experiments dispatched to GPU fleet
-python loop_swe.py
-```
-
-A legacy single-turn loop (`loop.py`) is also available — it uses SEARCH/REPLACE blocks instead of bash commands.
-
-### 2. Prepare training data
+### 1. Prepare training data
 
 Converts rollouts to parquet with deduplication and 80/20 train/test split.
 
@@ -120,86 +105,56 @@ Converts rollouts to parquet with deduplication and 80/20 train/test split.
 python data/prepare_autoresearch.py
 ```
 
-### 3. Run SDPO training
+### 2. Run smoke test
 
-Launches VERL with our custom agent loop. The model uses a bash tool to edit `train.py` across multiple turns during training, experiments run on 6 remote GPUs, and rewards flow back into the policy update.
+Runs 1 batch / 1 step end-to-end with Qwen3-4B to verify the full pipeline.
 
 ```bash
-bash scripts/run_training.sh
+bash scripts/run_smoke_test.sh
+```
+
+### 3. Run SDPO training
+
+Launches VERL with our custom agent loop. The model uses a bash tool to edit `train.py` across multiple turns during training, experiments run on 5 remote GPUs, and rewards flow back into the policy update.
+
+```bash
+bash scripts/run_training.sh [experiment_name]
 ```
 
 ### Key config (`configs/autoresearch_sdpo.yaml`)
 
-- **Model**: Qwen/Qwen3-14B
+- **Model**: Qwen/Qwen3-14B with YaRN rope_scaling (factor=2.0 for 64k context)
 - **Training GPUs**: 2 (colocated vLLM + FSDP2 with CPU offloading)
-- **Experiment GPUs**: 6 (remote, via SSH)
-- **Rollouts per batch**: 8
+- **Experiment GPUs**: 5 (remote, via SSH)
+- **Batch size**: 16 rollouts
 - **Max prompt length**: 16384 tokens
 - **Max response length**: 49152 tokens
 - **Learning rate**: 1e-5
-- **Epochs**: 30
-- **Self-distillation**: Environment feedback always included in teacher prompt (not just when no solution exists)
-- **FSDP2 offloading**: `offload_policy: true` offloads model params to CPU, freeing GPU memory for vLLM during rollout
-
-### Using the environment directly
-
-```python
-from environment import ExperimentEnvironment
-from runners import GPUPoolRunner
-
-env = ExperimentEnvironment(GPUPoolRunner())
-
-system, user = env.get_prompt()       # prompt for the policy
-result = env.step(model_response)     # ~5 min, auto-dispatches to free GPU
-result.reward                         # scalar for RL
-result.feedback                       # text feedback
-```
-
-See [INTEGRATION.md](INTEGRATION.md) for the full API.
+- **Epochs**: 60
+- **Chain of thought**: enabled (`enable_thinking: true`)
+- **Self-distillation**: Environment feedback included in teacher prompt
+- **Behavioral feedback**: Configurable notes to teacher about noop commands, malformed args, no-change submissions
 
 ## Observability
 
-### Wandb metrics to watch
+### Wandb metrics
 
-- **`env/val_bpb/mean`**, **`env/peak_vram_mb/mean`**, etc. — Environment metrics from experiment runs (val_bpb, peak_vram_mb, training_seconds, total_seconds, mfu_percent, total_tokens_M, num_steps, num_params_M, depth). Logged as mean/max/min via monkey-patched `compute_data_metrics` in `run_sdpo.py`.
-- **`self_distillation/reprompt_samples`** — Wandb table showing decoded teacher reprompt prefixes (first 3 samples per step). Useful for inspecting what context the teacher model sees.
-- **`feedback_available_fraction`** — Fraction of rollouts with environment feedback. Should be ~1.0. If 0.0, feedback isn't flowing from `agent_loop.py` through the VERL pipeline.
-- **`success_sample_fraction`** — Fraction of rollouts that beat `success_reward_threshold` (0.0). Any rollout that improves over baseline counts.
-- **`self_distillation_loss`** — KL loss toward the teacher distribution. Should be > 0 when self-distillation is active.
-- **`pg_loss`** — Policy gradient loss. Should be > 0 during training.
-- **`critic/score/mean`** — Average reward. Should be bounded (not inf/nan).
-
-### Feedback pipeline
-
-Environment feedback from experiment runs flows through:
-
-```
-SSHRunner (box1/2/4/5) → RunOutput(stdout, stderr, returncode)
-  → _dispatch_experiment() → (reward, feedback_string)
-    → output.extra_fields["reward_extra_info"]["feedback"] + env metrics
-      → VERL _postprocess() → non_tensor_batch["feedback"] + env_* keys
-        → reward_extra_keys → reward_extra_infos_dict
-          → _collect_feedback() → _build_teacher_message()
-            → SDPO teacher prompt includes feedback
-        → compute_data_metrics (patched) → env/*/mean|max|min → wandb
-```
-
-Every failure mode produces a feedback string:
-- **SSH failure**: connection error or timeout message
-- **Experiment crash** (exit != 0): SSH stderr + last 1000 chars of stdout
-- **OOM/segfault**: signal info + partial training output
-- **No val_bpb** (exit 0 but missing metric): last 20 lines of stdout
-- **Success**: `compute_reward()` feedback with val_bpb vs baseline
+- **`env/val_bpb/mean`** — Environment metrics from experiment runs
+- **`self_distillation/reprompt_samples`** — Decoded teacher reprompt prefixes (first 3 per step)
+- **`feedback_available_fraction`** — Should be ~1.0
+- **`actor/entropy`** — Watch for collapse toward 0
+- **`pg_loss`**, **`self_distillation_loss`** — Should be > 0
 
 ### Rollout dumps
 
-Set `trainer.rollout_data_dir` in config (default: `/data/rollout_dumps`). Each training step dumps a JSONL with inputs, outputs, scores, and feedback — useful for debugging what the model is generating.
+Set `trainer.rollout_data_dir` in config (default: `/data/rollout_dumps`). Each training step dumps a JSONL with inputs, outputs, scores, and feedback.
 
 ### Storage paths
 
-On the training server, data is stored under `/data`:
+On the training server:
 - `/data/checkpoints/{experiment_name}` — model checkpoints
 - `/data/rollout_dumps` — rollout data per training step
+- `/data/exp{N}` — archived artifacts from previous runs
 
 ## Prerequisites
 

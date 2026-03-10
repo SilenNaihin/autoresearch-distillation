@@ -5,12 +5,10 @@ Maps your fleet of H100s into a pool of GPU slots. Each experiment gets
 dispatched to a free slot via SSH, run for ~5 min, and results returned.
 
 Usage:
-    pool = GPUPoolRunner()              # uses all 8 GPUs
-    env = ExperimentEnvironment(pool)   # plug into the environment
-    result = env.step(model_response)   # auto-dispatches to a free GPU
+    pool = GPUPoolRunner()
+    output = pool.run(modified_train_py)  # blocks until a GPU is free
 
-For parallel experiments (from VERL), multiple threads can call env.step()
-concurrently — the pool handles queuing.
+Thread-safe — multiple VERL workers call pool.run() concurrently.
 """
 
 from __future__ import annotations
@@ -19,8 +17,6 @@ import os
 import subprocess
 import threading
 from dataclasses import dataclass
-from queue import Queue
-
 from environment import RunOutput
 
 

@@ -1,7 +1,7 @@
 """
-Shared prompt templates for the autoresearch distillation loop.
+Shared prompt templates for autoresearch SDPO training.
 
-Used by both loop_swe.py (data collection) and agent_loop.py (VERL RL training).
+Used by agent_loop.py (VERL RL training) and data/prepare_autoresearch.py.
 """
 
 SYSTEM_PROMPT = """\

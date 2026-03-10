@@ -1,12 +1,9 @@
 """
-Bash tool infrastructure for multi-turn agent editing of train.py.
+Bash tool for multi-turn agent editing of train.py.
 
-Two main components:
-  1. create_isolated_workdir() + run_agent_episode() — used by loop_swe.py for data collection
-  2. BashTool(BaseTool) — used by VERL's ToolAgentLoop for RL training
-
-Both share the same core pattern: create an isolated copy of autoresearch/,
-let the agent edit train.py via bash commands, then read back the result.
+BashTool(BaseTool) is used by VERL's ToolAgentLoop for RL training.
+Creates an isolated copy of autoresearch/, lets the agent edit train.py
+via bash commands, then reads back the result.
 """
 
 from __future__ import annotations
@@ -44,55 +41,6 @@ def create_isolated_workdir(autoresearch_dir: str = "autoresearch") -> str:
                     ignore=shutil.ignore_patterns("__pycache__", ".git", "*.pyc", ".venv"))
     return tmpdir
 
-
-# ---------------------------------------------------------------------------
-# Mini-swe-agent episode runner (for loop_swe.py data collection)
-# ---------------------------------------------------------------------------
-
-def run_agent_episode(
-    workdir: str,
-    model,
-    system_prompt: str,
-    instance_prompt: str,
-    step_limit: int = 20,
-) -> tuple[str, list[dict]]:
-    """Run a mini-swe-agent editing session in the given workdir.
-
-    Args:
-        workdir: Isolated directory containing train.py
-        model: A mini-swe-agent Model instance (e.g., LitellmModel)
-        system_prompt: System prompt template
-        instance_prompt: Task prompt with train.py content + history
-        step_limit: Max agent turns before forced termination
-
-    Returns:
-        (modified_train_py, trajectory) where trajectory is agent.messages
-    """
-    from minisweagent.agents.default import DefaultAgent
-    from minisweagent.environments.local import LocalEnvironment
-
-    env = LocalEnvironment(
-        cwd=workdir,
-        timeout=30,
-        env={"PAGER": "cat", "TQDM_DISABLE": "1"},
-    )
-
-    agent = DefaultAgent(
-        model,
-        env,
-        system_template=system_prompt,
-        instance_template="{{task}}",
-        step_limit=step_limit,
-        cost_limit=0.0,  # no cost limit for local vLLM
-    )
-
-    agent.run(task=instance_prompt)
-
-    # Read modified train.py
-    train_py_path = os.path.join(workdir, "train.py")
-    modified = Path(train_py_path).read_text()
-
-    return modified, list(agent.messages)
 
 
 # ---------------------------------------------------------------------------

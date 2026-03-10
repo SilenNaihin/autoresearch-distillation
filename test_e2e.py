@@ -19,7 +19,6 @@ from __future__ import annotations
 import subprocess
 import sys
 import time
-import threading
 from pathlib import Path
 
 from runners import FLEET, GPUSlot, SSHRunner, setup_fleet
