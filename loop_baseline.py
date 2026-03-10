@@ -44,13 +44,29 @@ OUTPUT_DIR = "outputs/baseline"
 
 
 def make_diff(baseline: str, modified: str) -> str:
+    """Compact diff: show only changed lines with line numbers."""
     if baseline == modified:
         return "(no changes)"
-    return "".join(unified_diff(
-        baseline.splitlines(keepends=True),
-        modified.splitlines(keepends=True),
-        fromfile="a/train.py", tofile="b/train.py",
-    ))
+    orig = baseline.splitlines()
+    mod = modified.splitlines()
+    lines = []
+    import difflib
+    for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(None, orig, mod).get_opcodes():
+        if tag == "equal":
+            continue
+        if tag == "replace":
+            for k in range(i1, i2):
+                lines.append(f"L{k+1} - {orig[k]}")
+            for k in range(j1, j2):
+                lines.append(f"L{k+1} + {mod[k]}")
+        elif tag == "delete":
+            for k in range(i1, i2):
+                lines.append(f"L{k+1} - {orig[k]}")
+        elif tag == "insert":
+            lines.append(f"L{j1+1} + (inserted {j2-j1} lines)")
+            for k in range(j1, j2):
+                lines.append(f"     + {mod[k]}")
+    return "\n".join(lines)
 
 
 def dispatch_experiment(train_py: str) -> tuple[dict, int, str]:
@@ -172,10 +188,17 @@ def main():
                 step_limit=args.step_limit,
             )
         except Exception as e:
+            import traceback
+            tb = traceback.format_exc()
             print(f"  Agent episode failed: {e}")
+            print(f"  Traceback: {tb}")
             feedback_history.append(f"Agent error: {e}")
             wandb.log({"turn": turn, "status": "agent_error", "reward": 0.0})
-            log_jsonl(output_path, {"turn": turn, "status": "agent_error", "error": str(e)})
+            log_jsonl(output_path, {
+                "turn": turn, "status": "agent_error",
+                "error": str(e), "traceback": tb,
+                "experiment_time": time.time() - t0,
+            })
             shutil.rmtree(workdir, ignore_errors=True)
             continue
         finally:
