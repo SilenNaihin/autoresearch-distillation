@@ -6,14 +6,14 @@ defaults:
   - sdpo
   - _self_
 
-max_model_len: 131072
+max_model_len: 65536
 
 data:
   train_files: ["${vars.dir}/data/autoresearch/train.parquet"]
   val_files: ["${vars.dir}/data/autoresearch/test.parquet"]
   train_batch_size: 16
   max_prompt_length: 16384
-  max_response_length: 114688
+  max_response_length: 49152
   apply_chat_template_kwargs: {"enable_thinking": true}
   return_raw_chat: True
   filter_overlong_prompts: True
@@ -29,8 +29,8 @@ actor_rollout_ref:
   actor:
     ppo_micro_batch_size_per_gpu: 1
     ppo_mini_batch_size: 16
-    ppo_max_token_len_per_gpu: 131072
-    use_dynamic_bsz: True
+    ppo_max_token_len_per_gpu: ${max_model_len}
+    use_dynamic_bsz: False
     ulysses_sequence_parallel_size: 2
     strategy: fsdp2
     fsdp_config:
@@ -74,7 +74,7 @@ actor_rollout_ref:
         hf_overrides:
           rope_scaling:
             rope_type: yarn
-            factor: 4.0
+            factor: 2.0
             original_max_position_embeddings: 32768
     multi_turn:
       enable: True
@@ -101,6 +101,8 @@ algorithm:
 critic:
   strategy: fsdp2
   ulysses_sequence_parallel_size: 2
+  use_dynamic_bsz: False
+  ppo_micro_batch_size_per_gpu: 1
   fsdp_config:
     strategy: fsdp2
     ulysses_sequence_parallel_size: 2
