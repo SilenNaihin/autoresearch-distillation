@@ -46,19 +46,27 @@ unset VLLM_ATTENTION_BACKEND
 # Set ulimit
 ulimit -c 0
 
-# Patch HF cached config.json to add YaRN rope_scaling for 128k context
-# (veRL's update_model_config crashes on rope_scaling=None, so we patch on disk)
+# Patch HF cached config.json to enforce YaRN settings used by this run.
 $PYTHON -c "
 import json, glob, os
+target_max_pos = int(os.environ.get('TARGET_MAX_POSITION_EMBEDDINGS', '65536'))
+target_orig = 32768
+target_factor = float(target_max_pos) / float(target_orig)
 for p in glob.glob(os.path.expanduser('~/.cache/huggingface/hub/models--Qwen--Qwen3-14B/snapshots/*/config.json')):
     real = os.path.realpath(p)
     with open(real) as f: c = json.load(f)
-    if c.get('rope_scaling') is None:
-        c['rope_scaling'] = {'rope_type': 'yarn', 'factor': 4.0, 'original_max_position_embeddings': 32768}
+    changed = False
+    if c.get('max_position_embeddings') != target_max_pos:
+        c['max_position_embeddings'] = target_max_pos
+        changed = True
+    if c.get('rope_scaling') != {'rope_type': 'yarn', 'factor': target_factor, 'original_max_position_embeddings': target_orig}:
+        c['rope_scaling'] = {'rope_type': 'yarn', 'factor': target_factor, 'original_max_position_embeddings': target_orig}
+        changed = True
+    if changed:
         with open(real, 'w') as f: json.dump(c, f, indent=2)
-        print(f'Patched rope_scaling in {real}')
+        print(f'Patched context config in {real}: max_position_embeddings={target_max_pos}, rope_factor={target_factor}')
     else:
-        print(f'rope_scaling already set in {real}')
+        print(f'context config already set in {real}')
 "
 
 # Copy our config into SDPO's config directory so Hydra can find it
