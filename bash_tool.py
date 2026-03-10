@@ -47,11 +47,18 @@ def create_isolated_workdir(autoresearch_dir: str = "autoresearch") -> str:
 # VERL BashTool — for RL training via ToolAgentLoop
 # ---------------------------------------------------------------------------
 
-# Add SDPO to path for verl imports
+# Add SDPO to path for verl imports (lazy — only needed for BashTool)
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "SDPO"))
 
-from verl.tools.base_tool import BaseTool
-from verl.tools.schemas import OpenAIFunctionToolSchema, ToolResponse
+try:
+    from verl.tools.base_tool import BaseTool
+    from verl.tools.schemas import OpenAIFunctionToolSchema, ToolResponse
+    _HAS_VERL = True
+except ImportError:
+    BaseTool = object
+    OpenAIFunctionToolSchema = None
+    ToolResponse = None
+    _HAS_VERL = False
 
 
 class BashTool(BaseTool):
