@@ -88,6 +88,7 @@ class AutoresearchAgentLoop(ToolAgentLoop):
         self._best_val_bpb = float("inf")
         self._best_lock = threading.Lock()
         self._behavioral_feedback = behavioral_feedback
+        self._sed_failed: str | None = None  # set to error text on sed failure
 
     async def run(self, sampling_params: dict[str, Any], **kwargs) -> AgentLoopOutput:
         """Override run() to add pre-creation and post-submission logic."""
@@ -95,6 +96,7 @@ class AutoresearchAgentLoop(ToolAgentLoop):
         self._total_tool_calls = 0
         self._failed_tool_calls = 0  # malformed JSON, errors
         self._noop_tool_calls = 0    # commands that don't touch train.py
+        self._sed_failed = None
 
         # Pre-create persistent bash tool instance
         bash_tool = self.tools.get("bash")
@@ -140,11 +142,13 @@ class AutoresearchAgentLoop(ToolAgentLoop):
                 await bash_tool.release(instance_id)
 
     async def _handle_processing_tools_state(self, agent_data):
-        """Override to terminate the loop after the model submits."""
+        """Override to terminate the loop after the model submits or sed fails."""
         state = await super()._handle_processing_tools_state(agent_data)
         bash_tool = self.tools.get("bash")
         instance_id = agent_data.tools_kwargs.get("_bash_instance_id")
         if bash_tool and instance_id and bash_tool.is_submitted(instance_id):
+            return AgentState.TERMINATED
+        if self._sed_failed:
             return AgentState.TERMINATED
         return state
 
@@ -183,6 +187,12 @@ class AutoresearchAgentLoop(ToolAgentLoop):
                 response, reward, metrics = await bash_tool.execute(
                     instance_id, tool_args, agent_data=agent_data
                 )
+
+                # Detect sed failures (no input files, bad expression, etc.)
+                # All sed errors produce output starting with "sed:"; success is silent.
+                resp_text = (response.text or "").strip()
+                if cmd_stripped == "sed" and "sed:" in resp_text:
+                    self._sed_failed = resp_text
 
                 # Truncate long output
                 if response.text and len(response.text) > self.max_tool_response_length:
@@ -239,13 +249,20 @@ class AutoresearchAgentLoop(ToolAgentLoop):
         from environment import compute_reward, parse_metrics
 
         if baseline == modified:
-            feedback = ("FAILURE: train.py was unchanged from the original. No experiment was run. Reward: 0.0.\n\n"
-                        "You MUST modify train.py to lower val_bpb. "
-                        "Use the bash tool with sed commands to make targeted edits, e.g.:\n"
-                        "  sed -i 's/n_head: int = 6/n_head: int = 8/' train.py\n"
-                        "  sed -i 's/sequence_len: int = 256/sequence_len: int = 512/' train.py\n\n"
-                        "Do NOT echo or cat the entire file into train.py. "
-                        "Make small, targeted changes with sed, then submit.")
+            if self._sed_failed:
+                feedback = (f"FAILURE: your sed command failed: {self._sed_failed}\n\n"
+                            "You must specify the target file. Example:\n"
+                            "<tool_call>\n"
+                            "{\"name\": \"bash\", \"arguments\": {\"command\": \"sed -i "
+                            "'s/WEIGHT_DECAY = 0.2/WEIGHT_DECAY = 0.1/' train.py\"}}\n"
+                            "</tool_call>")
+            else:
+                feedback = ("FAILURE: train.py was unchanged from the original. No experiment was run.\n\n"
+                            "You MUST modify train.py to lower val_bpb. Example:\n"
+                            "<tool_call>\n"
+                            "{\"name\": \"bash\", \"arguments\": {\"command\": \"sed -i "
+                            "'s/WEIGHT_DECAY = 0.2/WEIGHT_DECAY = 0.1/' train.py\"}}\n"
+                            "</tool_call>")
             return 0.0, f"{feedback}\n\n{notes_text}" if notes_text else feedback
 
         # Dispatch to GPU fleet (blocking I/O → run in thread)
@@ -283,5 +300,6 @@ class AutoresearchAgentLoop(ToolAgentLoop):
                 self._best_val_bpb = val_bpb
 
         logger.info(f"Experiment: val_bpb={val_bpb}, reward={reward:.4f}, status={status}")
-        feedback = f"Changes:\n{diff_text}\n\n{reward_feedback}"
+        metrics_line = " | ".join(f"{k}: {metrics[k]:g}" for k in ("num_steps", "num_params_M", "peak_vram_mb", "mfu_percent"))
+        feedback = f"Changes:\n{diff_text}\n\n{reward_feedback}\n{metrics_line}"
         return reward, f"{feedback}\n\n{notes_text}" if notes_text else feedback
