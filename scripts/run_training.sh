@@ -88,5 +88,5 @@ $PYTHON "$PROJECT_ROOT/run_sdpo.py" \
     --config-name "$CONFIG_NAME" \
     vars.dir="$PROJECT_ROOT" \
     vars.ckpt_dir="/data/checkpoints" \
-    'actor_rollout_ref.rollout.engine_kwargs.vllm.hf_overrides.max_position_embeddings=${max_model_len}' \
+    '+actor_rollout_ref.rollout.engine_kwargs.vllm.hf_overrides.max_position_embeddings=${max_model_len}' \
     "$@"
