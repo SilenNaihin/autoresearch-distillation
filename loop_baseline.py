@@ -34,11 +34,11 @@ from environment import BASELINE_VAL_BPB, compute_reward, parse_metrics
 from prompts import SYSTEM_PROMPT, build_instance_prompt
 from runners import FLEET, SSHRunner
 
-# Experiments run on A100 backup only — H100 fleet reserved for SDPO.
-EXPERIMENT_FLEET = [s for s in FLEET if s.name == "a100-gpu0"]
+# Experiments run on box1 H100 — inference on A100 via remote vLLM.
+EXPERIMENT_FLEET = [s for s in FLEET if s.name == "box1-gpu0"]
 
 MODEL = "Qwen/Qwen3-14B"
-VLLM_BASE_URL = "http://localhost:8000/v1"
+VLLM_BASE_URL = "http://20.125.45.203:8000/v1"
 OUTPUT_DIR = "outputs/baseline"
 
 
