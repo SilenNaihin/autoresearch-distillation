@@ -42,6 +42,55 @@ def create_isolated_workdir(autoresearch_dir: str = "autoresearch") -> str:
     return tmpdir
 
 
+# ---------------------------------------------------------------------------
+# Mini-swe-agent episode runner (for loop_baseline.py data collection)
+# ---------------------------------------------------------------------------
+
+def run_agent_episode(
+    workdir: str,
+    model,
+    system_prompt: str,
+    instance_prompt: str,
+    step_limit: int = 20,
+) -> tuple[str, list[dict]]:
+    """Run a mini-swe-agent editing session in the given workdir.
+
+    Args:
+        workdir: Isolated directory containing train.py
+        model: A mini-swe-agent Model instance (e.g., LitellmModel)
+        system_prompt: System prompt template
+        instance_prompt: Task prompt with train.py content + history
+        step_limit: Max agent turns before forced termination
+
+    Returns:
+        (modified_train_py, trajectory) where trajectory is agent.messages
+    """
+    from minisweagent.agents.default import DefaultAgent
+    from minisweagent.environments.local import LocalEnvironment
+
+    env = LocalEnvironment(
+        cwd=workdir,
+        timeout=30,
+        env={"PAGER": "cat", "TQDM_DISABLE": "1"},
+    )
+
+    agent = DefaultAgent(
+        model,
+        env,
+        system_template=system_prompt,
+        instance_template="{{task}}",
+        step_limit=step_limit,
+        cost_limit=0.0,  # no cost limit for local vLLM
+    )
+
+    agent.run(task=instance_prompt)
+
+    # Read modified train.py
+    train_py_path = os.path.join(workdir, "train.py")
+    modified = Path(train_py_path).read_text()
+
+    return modified, list(agent.messages)
+
 
 # ---------------------------------------------------------------------------
 # VERL BashTool — for RL training via ToolAgentLoop
