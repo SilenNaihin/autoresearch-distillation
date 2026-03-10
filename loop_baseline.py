@@ -42,31 +42,95 @@ MODEL = "Qwen/Qwen3-14B"
 VLLM_BASE_URL = "http://20.125.45.203:8000/v1"
 OUTPUT_DIR = "outputs/baseline"
 
+# How many top results to show with full diffs in the feedback prompt
+TOP_K_FULL_DIFFS = 3
+
 
 def make_diff(baseline: str, modified: str) -> str:
-    """Compact diff: show only changed lines with line numbers."""
+    """Full unified diff — no truncation."""
     if baseline == modified:
         return "(no changes)"
-    orig = baseline.splitlines()
-    mod = modified.splitlines()
-    lines = []
-    import difflib
-    for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(None, orig, mod).get_opcodes():
-        if tag == "equal":
-            continue
-        if tag == "replace":
-            for k in range(i1, i2):
-                lines.append(f"L{k+1} - {orig[k]}")
-            for k in range(j1, j2):
-                lines.append(f"L{k+1} + {mod[k]}")
-        elif tag == "delete":
-            for k in range(i1, i2):
-                lines.append(f"L{k+1} - {orig[k]}")
-        elif tag == "insert":
-            lines.append(f"L{j1+1} + (inserted {j2-j1} lines)")
-            for k in range(j1, j2):
-                lines.append(f"     + {mod[k]}")
-    return "\n".join(lines)
+    return "".join(unified_diff(
+        baseline.splitlines(keepends=True),
+        modified.splitlines(keepends=True),
+        fromfile="a/train.py", tofile="b/train.py",
+    ))
+
+
+def format_feedback_prompt(turn_results: list[dict]) -> str:
+    """Format accumulated results into a structured feedback block.
+
+    Shows top-K results with full diffs prominently, then one-line summaries
+    for the rest. This ensures the model can see exactly what worked without
+    burning context on failed attempts.
+    """
+    if not turn_results:
+        return ""
+
+    successful = [r for r in turn_results if r.get("val_bpb") is not None]
+    failed = [r for r in turn_results if r.get("val_bpb") is None]
+
+    successful.sort(key=lambda r: r["val_bpb"])
+
+    parts = []
+
+    # Top-K best results with full diffs
+    top_k = successful[:TOP_K_FULL_DIFFS]
+    if top_k:
+        parts.append("## Best results so far (full diffs)")
+        for i, r in enumerate(top_k):
+            rank = i + 1
+            marker = " *** BEST ***" if rank == 1 else ""
+            parts.append(
+                f"### #{rank} — val_bpb={r['val_bpb']:.6f} (attempt {r['turn']+1}){marker}\n"
+                f"```diff\n{r['diff']}\n```"
+            )
+
+    # Remaining successful runs as one-line summaries
+    rest = successful[TOP_K_FULL_DIFFS:]
+    if rest:
+        parts.append("## Other successful attempts")
+        for r in rest:
+            parts.append(
+                f"- Attempt {r['turn']+1}: val_bpb={r['val_bpb']:.6f} "
+                f"(depth={r.get('depth', '?')}, tokens={r.get('tokens_M', '?')}M)"
+            )
+
+    # Failed attempts as compact summaries
+    if failed:
+        parts.append("## Failed attempts (avoid repeating these)")
+        for r in failed:
+            status = r.get("status", "crash")
+            reason = r.get("crash_reason", "unknown")
+            parts.append(f"- Attempt {r['turn']+1}: {status} — {reason}")
+
+    parts.append(
+        "\nLearn from these results. Don't repeat things that didn't work. "
+        "Build on the best approaches above to further lower val_bpb."
+    )
+
+    return "\n\n".join(parts)
+
+
+def classify_crash(error_text: str) -> str:
+    """Extract a short crash reason from error output."""
+    if not error_text:
+        return "unknown error"
+    lower = error_text.lower()
+    if "out of memory" in lower or "oom" in lower:
+        return "OOM (out of VRAM)"
+    if "syntaxerror" in lower:
+        return "SyntaxError in generated code"
+    if "assertionerror" in lower or "assert " in lower:
+        return "assertion failed (batch size / config mismatch)"
+    if "flash_attn" in lower or "flashattention" in lower:
+        return "FlashAttention error (likely unsupported head_dim)"
+    if "importerror" in lower or "modulenotfounderror" in lower:
+        return "import error (unavailable package)"
+    lines = [l.strip() for l in error_text.strip().splitlines() if l.strip()]
+    if lines:
+        return lines[-1][:120]
+    return "unknown error"
 
 
 def dispatch_experiment(train_py: str) -> tuple[dict, int, str]:
@@ -157,7 +221,7 @@ def main():
 
     # Multi-turn loop
     best_val_bpb = float("inf")
-    feedback_history: list[str] = []
+    turn_results: list[dict] = []
 
     for turn in range(args.max_turns):
         t0 = time.time()
@@ -165,17 +229,11 @@ def main():
         print(f"Turn {turn}/{args.max_turns}")
         print(f"{'='*60}")
 
-        # Build instance prompt with accumulated feedback
+        # Build instance prompt with structured feedback
         instance_prompt = build_instance_prompt(baseline, [])
-        if feedback_history:
-            feedback_block = "\n\n".join(
-                f"### Attempt {i+1}\n{fb}" for i, fb in enumerate(feedback_history)
-            )
-            instance_prompt += (
-                f"\n\n## Results from previous attempts\n{feedback_block}"
-                "\n\nLearn from these results. Don't repeat things that didn't work. "
-                "Build on approaches that improved val_bpb."
-            )
+        feedback_block = format_feedback_prompt(turn_results)
+        if feedback_block:
+            instance_prompt += "\n\n" + feedback_block
 
         # Run mini-swe-agent episode (model edits train.py via bash)
         workdir = create_isolated_workdir()
@@ -192,7 +250,13 @@ def main():
             tb = traceback.format_exc()
             print(f"  Agent episode failed: {e}")
             print(f"  Traceback: {tb}")
-            feedback_history.append(f"Agent error: {e}")
+            turn_results.append({
+                "turn": turn,
+                "val_bpb": None,
+                "diff": "",
+                "status": "agent_error",
+                "crash_reason": str(e)[:200],
+            })
             wandb.log({"turn": turn, "status": "agent_error", "reward": 0.0})
             log_jsonl(output_path, {
                 "turn": turn, "status": "agent_error",
@@ -212,9 +276,14 @@ def main():
         print(f"  Diff size:  {len(diff_text)} chars")
 
         if baseline == modified:
-            feedback = "No changes were made to train.py."
             print(f"  Status: no_changes")
-            feedback_history.append(feedback)
+            turn_results.append({
+                "turn": turn,
+                "val_bpb": None,
+                "diff": "",
+                "status": "no_changes",
+                "crash_reason": "no changes made to train.py",
+            })
             wandb.log({"turn": turn, "status": "no_changes", "reward": 0.0,
                         "tool_calls": n_tool_calls})
             log_jsonl(output_path, {"turn": turn, "status": "no_changes",
@@ -228,14 +297,20 @@ def main():
         experiment_time = time.time() - t0
 
         if returncode != 0 or (returncode == 0 and val_bpb is None and error_feedback):
-            feedback = f"Changes:\n{diff_text[:1000]}\n\n{error_feedback}"
             status = "crash" if returncode != 0 else "no_metric"
-            print(f"  Status: {status}")
-            feedback_history.append(feedback)
+            crash_reason = classify_crash(error_feedback)
+            print(f"  Status: {status} — {crash_reason}")
+            turn_results.append({
+                "turn": turn,
+                "val_bpb": None,
+                "diff": diff_text,
+                "status": status,
+                "crash_reason": crash_reason,
+            })
             wandb.log({"turn": turn, "status": status, "reward": 0.0,
                         "experiment_time": experiment_time, "tool_calls": n_tool_calls})
             log_jsonl(output_path, {"turn": turn, "status": status,
-                                    "diff": diff_text[:2000], "feedback": error_feedback,
+                                    "diff": diff_text, "feedback": error_feedback,
                                     "experiment_time": experiment_time})
             continue
 
@@ -245,8 +320,18 @@ def main():
             best_val_bpb = val_bpb
 
         memory_gb = metrics.get("peak_vram_mb", 0) / 1024
-        feedback = f"Changes:\n{diff_text[:1000]}\n\n{reward_feedback} Memory: {memory_gb:.1f} GB."
-        feedback_history.append(feedback)
+        depth = metrics.get("depth")
+        tokens_M = metrics.get("total_tokens_M")
+
+        turn_results.append({
+            "turn": turn,
+            "val_bpb": val_bpb,
+            "diff": diff_text,
+            "status": status,
+            "depth": int(depth) if depth else None,
+            "tokens_M": int(tokens_M) if tokens_M else None,
+            "memory_gb": round(memory_gb, 1),
+        })
 
         print(f"  val_bpb={val_bpb:.6f}  best={best_val_bpb:.6f}  "
               f"reward={reward:.4f}  status={status}  time={experiment_time:.0f}s")

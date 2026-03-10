@@ -35,33 +35,41 @@ The agent does NOT run experiments or see results in real-time. It edits blind, 
 
 ## Feedback history format
 
-Each turn appends one entry to `feedback_history`. The full history is injected into the next turn's prompt under `## Results from previous attempts`.
+Each turn appends a structured result dict to `turn_results`. At prompt time, `format_feedback_prompt()` builds a ranked feedback block:
 
-**Successful run:**
+1. **Top 3 results** (by val_bpb, ascending) — shown with **full untruncated diffs**. The #1 result is marked `*** BEST ***`.
+2. **Other successful runs** — one-line summaries: `Attempt N: val_bpb=X (depth=Y, tokens=ZM)`.
+3. **Failed attempts** — one-line summaries with classified crash reason: `Attempt N: crash — OOM (out of VRAM)`.
+
+Crash reasons are auto-classified into: OOM, SyntaxError, assertion failure, FlashAttention error, import error, or the last error line.
+
+**Example prompt feedback (after 10 turns):**
 ```
-### Attempt 3
-Changes:
+## Best results so far (full diffs)
+
+### #1 — val_bpb=1.037900 (attempt 11) *** BEST ***
+\```diff
 --- a/train.py
 +++ b/train.py
-@@ -45,7 +45,7 @@
--    batch_size = 64
-+    batch_size = 48
-... (truncated at 1000 chars)
+... (full diff, no truncation)
+\```
 
-val_bpb=1.048000 (baseline=1.056, improved by 0.008000) Memory: 62.3 GB.
+### #2 — val_bpb=1.057543 (attempt 21)
+\```diff
+...
+\```
+
+## Other successful attempts
+- Attempt 4: val_bpb=1.0661 (depth=8, tokens=728M)
+- Attempt 5: val_bpb=1.0667 (depth=8, tokens=729M)
+
+## Failed attempts (avoid repeating these)
+- Attempt 1: crash — OOM (out of VRAM)
+- Attempt 3: crash — SyntaxError in generated code
+- Attempt 7: crash — FlashAttention error (likely unsupported head_dim)
 ```
 
-**Crash:**
-```
-### Attempt 4
-Changes:
-<diff truncated to 1000 chars>
-
-Experiment crashed (exit 1):
-torch.OutOfMemoryError: CUDA out of memory...
-```
-
-Content is diff (max 1000 chars) + outcome (val_bpb or crash trace). No model reasoning is preserved — the agent's chain-of-thought from each episode is discarded. This is intentional: it matches what SDPO sees (reward signal + environment feedback, not the model's own reasoning).
+No model reasoning is preserved — the agent's chain-of-thought from each episode is discarded. This is intentional: it matches what SDPO sees (reward signal + environment feedback, not the model's own reasoning).
 
 ## Why this design
 
@@ -83,6 +91,8 @@ Content is diff (max 1000 chars) + outcome (val_bpb or crash trace). No model re
 **30 turns.** ~2.5-3 hours wall-clock. The model will likely exhaust novel ideas by turn 15-20, and feedback history will approach context limits (32k tokens) around the same time. Each feedback entry is ~1-1.5KB, so 30 entries = ~30-45KB of text = ~10-15k tokens. Combined with the ~8k token base prompt (train.py + system prompt), this stays within the 32k context window but leaves progressively less room for the model's own generation.
 
 **No feedback history cap.** All 30 turns accumulate. This is a deliberate choice: the baseline's advantage over SDPO is its ability to condition on full history. Truncating would handicap it. If context pressure becomes an issue, it'll show up as degraded output quality in later turns — which is itself a useful signal (context-based learning has a ceiling that weight-based learning doesn't).
+
+**No diff truncation.** Diffs are stored and displayed in full. Earlier versions truncated to 1000 chars, which silently dropped critical changes (e.g., DEPTH=12 in the best-performing run). If the model can't see what made a result work, it can't build on it — that's a scaffolding bug, not an ICL limitation.
 
 ## Running
 
@@ -120,3 +130,28 @@ Output JSONL saved to `outputs/baseline/<run-name>-<timestamp>.jsonl` with full 
 - **Crash rate over time**: Does the model learn to avoid OOM/errors from feedback? If crash rate stays flat, feedback isn't helping.
 - **Comparison to SDPO**: SDPO trains on 16 parallel trajectories per epoch. The baseline runs 1 sequential trajectory. Even accounting for this, if SDPO finds lower val_bpb faster, weight updates are encoding something that context alone can't.
 - **Late-turn degradation**: As feedback history grows, does output quality drop? This would show the context window becoming a bottleneck.
+
+## Design decisions
+
+### Why always start from the original train.py
+
+Each turn sees the unmodified train.py and must propose changes from scratch. This matches SDPO exactly — SDPO also starts from the original each rollout. The difference is where "memory" lives: SDPO stores it in weight updates, the baseline stores it in the context feedback. This is the core comparison. If we let the baseline carry forward modified files, it would be a different (and unfair) experiment.
+
+### Why structured top-K feedback instead of flat history
+
+The first H100 baseline run (30 turns, 2024-03) revealed that flat chronological feedback was ineffective:
+- The model found val_bpb=1.0379 at turn 10 (10 simultaneous changes) but never replicated it in 20 subsequent turns.
+- Turn 13 attempted the same approach but missed DEPTH=12 and set EMBEDDING_LR=1.45 (2.4x too high) — the winning diff was truncated so the model couldn't see the full recipe.
+- Only 1/20 successful runs beat baseline (5%).
+
+The restructured format shows top-3 results with full diffs so the model can see exactly what worked, while compressing failures to one-line summaries. This gives ICL its best possible chance — making the SDPO comparison more rigorous.
+
+### Hardware constraints in system prompt
+
+The first run had a 33% crash rate. Breakdown:
+- 60% of crashes: OOM (model didn't know VRAM limit)
+- 20% of crashes: FlashAttention head_dim errors (model didn't know kernel constraints)
+- 10%: assertion failures (batch size divisibility)
+- 10%: syntax errors
+
+Adding explicit hardware constraints to the system prompt is fair — both baseline and SDPO share the same `prompts.py`. This reduces wasted turns on crashes the model could have avoided with information it was never given.
