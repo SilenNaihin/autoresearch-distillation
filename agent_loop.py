@@ -140,7 +140,7 @@ class AutoresearchAgentLoop(ToolAgentLoop):
                 await bash_tool.release(instance_id)
 
     async def _handle_processing_tools_state(self, agent_data):
-        """Submit signal is optional; when present it only enables early termination."""
+        """Override to terminate the loop after the model submits."""
         state = await super()._handle_processing_tools_state(agent_data)
         bash_tool = self.tools.get("bash")
         instance_id = agent_data.tools_kwargs.get("_bash_instance_id")
@@ -229,9 +229,15 @@ class AutoresearchAgentLoop(ToolAgentLoop):
 
         from environment import compute_reward, parse_metrics
 
-        unchanged = baseline == modified
-        if unchanged:
-            logger.info("No train.py edits detected; auto-submitting current train.py for evaluation.")
+        if baseline == modified:
+            feedback = ("FAILURE: train.py was unchanged from the original. No experiment was run. Reward: 0.0.\n\n"
+                        "You MUST modify train.py to lower val_bpb. "
+                        "Use the bash tool with sed commands to make targeted edits, e.g.:\n"
+                        "  sed -i 's/n_head: int = 6/n_head: int = 8/' train.py\n"
+                        "  sed -i 's/sequence_len: int = 256/sequence_len: int = 512/' train.py\n\n"
+                        "Do NOT echo or cat the entire file into train.py. "
+                        "Make small, targeted changes with sed, then submit.")
+            return 0.0, f"{feedback}\n\n{notes_text}" if notes_text else feedback
 
         # Dispatch to GPU fleet (blocking I/O → run in thread)
         pool = _get_pool()
@@ -260,15 +266,6 @@ class AutoresearchAgentLoop(ToolAgentLoop):
             tail = "\n".join(output.stdout.strip().splitlines()[-20:]) if output.stdout else "empty output"
             logger.warning(f"No val_bpb in experiment output. Tail:\n{tail}")
             feedback = f"Changes:\n{diff_text}\n\nExperiment ran but produced no val_bpb metric. Output tail:\n{tail}"
-            return 0.0, f"{feedback}\n\n{notes_text}" if notes_text else feedback
-
-        if unchanged:
-            feedback = (
-                "Changes:\nNo changes were made to train.py.\n\n"
-                f"Experiment ran on unchanged train.py. val_bpb={val_bpb}. Reward: 0.0.\n\n"
-                "You MUST modify train.py to lower val_bpb. "
-                "Use targeted edits with sed before submitting."
-            )
             return 0.0, f"{feedback}\n\n{notes_text}" if notes_text else feedback
 
         with self._best_lock:
