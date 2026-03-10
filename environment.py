@@ -16,7 +16,7 @@ class RunOutput:
     returncode: int
 
 
-BASELINE_VAL_BPB = 1.0
+BASELINE_VAL_BPB = 1.056
 
 
 def parse_metrics(output: str) -> dict:

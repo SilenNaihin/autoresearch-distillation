@@ -96,13 +96,20 @@ def format_feedback_prompt(turn_results: list[dict]) -> str:
                 f"(depth={r.get('depth', '?')}, tokens={r.get('tokens_M', '?')}M)"
             )
 
-    # Failed attempts as compact summaries
+    # Failed attempts — include diff so the model knows what to avoid
     if failed:
         parts.append("## Failed attempts (avoid repeating these)")
         for r in failed:
             status = r.get("status", "crash")
             reason = r.get("crash_reason", "unknown")
-            parts.append(f"- Attempt {r['turn']+1}: {status} — {reason}")
+            diff = r.get("diff", "")
+            if diff and diff != "(no changes)":
+                parts.append(
+                    f"### Attempt {r['turn']+1}: {status} — {reason}\n"
+                    f"```diff\n{diff}\n```"
+                )
+            else:
+                parts.append(f"- Attempt {r['turn']+1}: {status} — {reason}")
 
     parts.append(
         "\nLearn from these results. Don't repeat things that didn't work. "
@@ -165,6 +172,18 @@ def log_jsonl(path: Path, payload: dict):
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a") as f:
         f.write(json.dumps(payload, ensure_ascii=True) + "\n")
+
+
+def log_trace(output_dir: Path, run_name: str, turn: int, prompt: str, trajectory: list[dict]):
+    """Save full prompt + agent trajectory for debugging."""
+    trace_dir = output_dir / f"{run_name}_traces"
+    trace_dir.mkdir(parents=True, exist_ok=True)
+    trace_path = trace_dir / f"turn_{turn:03d}.json"
+    trace_path.write_text(json.dumps({
+        "turn": turn,
+        "prompt": prompt,
+        "trajectory": trajectory,
+    }, ensure_ascii=True, indent=2))
 
 
 def main():
@@ -262,11 +281,15 @@ def main():
                 "turn": turn, "status": "agent_error",
                 "error": str(e), "traceback": tb,
                 "experiment_time": time.time() - t0,
+                "prompt_len": len(instance_prompt),
             })
             shutil.rmtree(workdir, ignore_errors=True)
             continue
         finally:
             shutil.rmtree(workdir, ignore_errors=True)
+
+        # Log full trace for debugging (always, regardless of experiment outcome)
+        log_trace(Path(OUTPUT_DIR), args.run_name, turn, instance_prompt, trajectory)
 
         diff_text = make_diff(baseline, modified)
         n_tool_calls = sum(1 for m in trajectory if m.get("role") == "assistant"
@@ -287,7 +310,8 @@ def main():
             wandb.log({"turn": turn, "status": "no_changes", "reward": 0.0,
                         "tool_calls": n_tool_calls})
             log_jsonl(output_path, {"turn": turn, "status": "no_changes",
-                                    "tool_calls": n_tool_calls})
+                                    "tool_calls": n_tool_calls,
+                                    "prompt_len": len(instance_prompt)})
             continue
 
         # Dispatch to experiment GPU
@@ -311,7 +335,8 @@ def main():
                         "experiment_time": experiment_time, "tool_calls": n_tool_calls})
             log_jsonl(output_path, {"turn": turn, "status": status,
                                     "diff": diff_text, "feedback": error_feedback,
-                                    "experiment_time": experiment_time})
+                                    "experiment_time": experiment_time,
+                                    "prompt_len": len(instance_prompt)})
             continue
 
         # Compute reward
@@ -348,6 +373,7 @@ def main():
             "reward": reward, "status": status, "memory_gb": memory_gb,
             "experiment_time": experiment_time, "diff": diff_text,
             "metrics": metrics, "tool_calls": n_tool_calls,
+            "prompt_len": len(instance_prompt),
         })
 
     # Summary

@@ -19,11 +19,11 @@ pandas, pyarrow, requests, rustbpe, tiktoken.
 - VRAM is a soft constraint. Some increase is OK for meaningful val_bpb gains.
 
 ## Hardware constraints
-- The experiment GPU has 93 GB VRAM (H100 SXM). Going over causes OOM crashes.
+- The experiment GPU has 93 GB VRAM (H100 SXM). The default config uses ~72 GB, leaving ~20 GB headroom.
+- Doubling ASPECT_RATIO or significantly increasing depth WILL cause OOM. Prefer optimizer/LR/schedule changes.
 - FlashAttention 3 (Hopper) requires head_dim to be a power of 2 (64, 128, 256). Other values crash.
 - TOTAL_BATCH_SIZE must be divisible by (DEVICE_BATCH_SIZE * sequence_length). \
 Violating this triggers an assertion error.
-- Increasing model depth or width increases VRAM. Stay under ~85 GB to leave headroom.
 
 ## Workflow
 1. Think step-by-step about what changes could lower val_bpb (architecture, hyperparameters, optimization, etc.)
