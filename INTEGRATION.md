@@ -17,7 +17,7 @@
 4. Model submits: `echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT`
 5. `_handle_processing_tools_state` detects submission → TERMINATED
 6. `_dispatch_experiment()` reads modified train.py, dispatches to `GPUPoolRunner`
-7. Metrics parsed, reward computed: `max(0, 1.056 - val_bpb)`
+7. Metrics parsed, reward computed: `max(0, 1.0 - val_bpb)`
 8. Feedback (diff + results + behavioral notes) flows into SDPO teacher prompt
 
 ## SDPO Self-Distillation Feedback

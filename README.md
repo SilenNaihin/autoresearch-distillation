@@ -52,11 +52,11 @@ box2, box4, box5                — experiment execution (5 H100s total)
 
 ## Reward Structure
 
-Reward is computed against a hardcoded baseline (`BASELINE_VAL_BPB = 1.056`):
+Reward is computed against a hardcoded baseline (`BASELINE_VAL_BPB = 1.0`):
 
 | Status | Reward | When |
 |--------|--------|------|
-| improvement | `max(0, 1.056 - val_bpb)` | val_bpb below baseline |
+| improvement | `max(0, 1.0 - val_bpb)` | val_bpb below baseline |
 | no_improvement | `0.0` | val_bpb at or above baseline |
 | crash | `0.0` | any failure mode |
 
