@@ -1,8 +1,8 @@
 # autoresearch-distillation
 
-Self-improving ML research agent. An open-source model proposes modifications to a training script, runs real experiments, and learns from the outcomes via online self-distillation (SDPO).
+Boost a model's single-shot performance at coming up with novel ML research ideas using test-time training. An open-source model proposes modifications to a training script, runs real experiments, and learns from the outcomes via [Self-Distillation Policy Optimization (SDPO)](https://github.com/lasgroup/SDPO).
 
-Built on [Karpathy's autoresearch](https://github.com/karpathy/autoresearch) and [ByteDance's SDPO](https://github.com/bytedance/SDPO).
+Built on [Karpathy's autoresearch](https://github.com/karpathy/autoresearch) and [SDPO](https://github.com/lasgroup/SDPO).
 
 ## How It Works
 
@@ -66,33 +66,34 @@ No negative rewards. The SDPO `success_reward_threshold` is set to `0.0`, so any
 
 ```
 autoresearch-distillation/
-├── agent_loop.py              # VERL agent loop — extends ToolAgentLoop for multi-turn bash editing
+├── agent_loop.py              # VERL agent loop — multi-turn bash editing + experiment dispatch
 ├── bash_tool.py               # VERL BashTool — isolated workdir + bash execution
 ├── environment.py             # RunOutput, parse_metrics(), compute_reward()
-├── runners.py                 # GPUPoolRunner — SSH dispatch to 5 remote H100s
+├── runners.py                 # GPUPoolRunner — SSH dispatch to remote H100s
 ├── prompts.py                 # System prompt + instance prompt builder
 ├── reward.py                  # Passthrough reward function for VERL
-├── run_sdpo.py                # Entry point — patches SDPO trainer for env metrics + reprompt logging
+├── run_sdpo.py                # Entry point — patches SDPO trainer for env metrics logging
 │
 ├── configs/
-│   ├── autoresearch_sdpo.yaml # Hydra config for SDPO training
+│   ├── autoresearch_sdpo.yaml # Hydra config for SDPO training (Qwen3-14B)
 │   ├── smoke_test.yaml        # 1-step smoke test config (Qwen3-4B)
 │   ├── bash_tool_config.yaml  # VERL tool config for bash tool
-│   └── agent_loops.yaml       # Agent loop registry (autoresearch_agent)
+│   └── agent_loops.yaml       # Agent loop registry + behavioral_feedback flag
 ├── data/
 │   └── prepare_autoresearch.py # Convert rollouts.jsonl → parquet for SDPO
 ├── scripts/
-│   ├── run_training.sh        # Launch SDPO training
+│   ├── run_training.sh        # Launch SDPO training (patches YaRN, copies configs)
 │   ├── run_smoke_test.sh      # 1-step end-to-end verification
-│   ├── setup_gpu_box.sh       # Bootstrap a GPU box
-│   └── smoke_test.sh          # Verify GPU box setup
+│   ├── setup_gpu_box.sh       # Bootstrap a remote GPU box
+│   └── smoke_test.sh          # Verify GPU box connectivity
 │
 ├── autoresearch/              # Upstream submodule (train.py, prepare.py) — read-only
 ├── SDPO/                      # SDPO/VERL fork — submodule
-├── rollouts/                  # Collected rollouts (rollouts.jsonl)
 │
 ├── test_e2e.py                # End-to-end fleet verification
-└── test_runner.py             # Runner unit tests
+├── test_runner.py             # Runner unit tests
+├── INTEGRATION.md             # Technical integration guide
+└── README.md
 ```
 
 ## Usage
@@ -166,7 +167,7 @@ On the training server:
 ## Relationship to Upstream
 
 - **autoresearch/** — submodule tracking [karpathy/autoresearch](https://github.com/karpathy/autoresearch). Contains `train.py` (the file the agent modifies), `prepare.py` (data/eval), and `pyproject.toml`.
-- **SDPO/** — submodule tracking a fork of [ByteDance's SDPO](https://github.com/bytedance/SDPO). Provides the VERL trainer, agent loop system, and SDPO loss.
+- **SDPO/** — submodule tracking a fork of [SDPO](https://github.com/lasgroup/SDPO). Provides the VERL trainer, agent loop system, and SDPO loss.
 
 ## License
 
