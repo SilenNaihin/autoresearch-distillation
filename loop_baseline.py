@@ -79,13 +79,13 @@ def format_feedback_prompt(turn_results: list[dict]) -> str:
         best = successful[0]["val_bpb"]
         if best < BASELINE_VAL_BPB:
             parts.append(
-                f"**The unmodified train.py achieves val_bpb={BASELINE_VAL_BPB}. "
+                f"**The current train.py achieves val_bpb={BASELINE_VAL_BPB}. "
                 f"Your best so far: val_bpb={best:.4f}. "
-                f"Make changes to train.py to push this as low as you can.**"
+                f"Make changes to continue to push it even lower than your previous changes.**"
             )
         else:
             parts.append(
-                f"**The unmodified train.py achieves val_bpb={BASELINE_VAL_BPB}. "
+                f"**The current train.py achieves val_bpb={BASELINE_VAL_BPB}. "
                 f"Make changes to train.py to push this as low as you can.**"
             )
 
