@@ -88,7 +88,7 @@ class AutoresearchAgentLoop(ToolAgentLoop):
         self._best_val_bpb = float("inf")
         self._best_lock = threading.Lock()
         self._behavioral_feedback = behavioral_feedback
-        self._sed_failed: str | None = None  # set to error text on sed failure
+        self._sed_failed: str | None = None  # tracked but no longer triggers early termination
 
     async def run(self, sampling_params: dict[str, Any], **kwargs) -> AgentLoopOutput:
         """Override run() to add pre-creation and post-submission logic."""
@@ -142,13 +142,11 @@ class AutoresearchAgentLoop(ToolAgentLoop):
                 await bash_tool.release(instance_id)
 
     async def _handle_processing_tools_state(self, agent_data):
-        """Override to terminate the loop after the model submits or sed fails."""
+        """Override to terminate the loop after the model submits."""
         state = await super()._handle_processing_tools_state(agent_data)
         bash_tool = self.tools.get("bash")
         instance_id = agent_data.tools_kwargs.get("_bash_instance_id")
         if bash_tool and instance_id and bash_tool.is_submitted(instance_id):
-            return AgentState.TERMINATED
-        if self._sed_failed:
             return AgentState.TERMINATED
         return state
 
