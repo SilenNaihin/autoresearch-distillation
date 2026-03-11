@@ -167,30 +167,39 @@ class AutoresearchAgentLoop(ToolAgentLoop):
                 self._total_tool_calls += 1
                 return ToolResponse(text="Error: invalid JSON in tool arguments"), 0.0, {}
 
-            self._total_tool_calls += 1
-            cmd = tool_args.get("command", "")
-            # Track commands that likely don't modify train.py
-            cmd_stripped = cmd.strip().split()[0] if cmd.strip() else ""
-            if cmd_stripped and cmd_stripped not in self._TRAIN_PY_CMDS and "train.py" not in cmd:
-                self._noop_tool_calls += 1
+            if not isinstance(tool_args, dict):
+                self._failed_tool_calls += 1
+                self._total_tool_calls += 1
+                return ToolResponse(text="Error: tool arguments must be a JSON object"), 0.0, {}
 
-            response, reward, metrics = await bash_tool.execute(
-                instance_id, tool_args, agent_data=agent_data
-            )
+            try:
+                self._total_tool_calls += 1
+                cmd = tool_args.get("command", "")
+                # Track commands that likely don't modify train.py
+                cmd_stripped = cmd.strip().split()[0] if cmd.strip() else ""
+                if cmd_stripped and cmd_stripped not in self._TRAIN_PY_CMDS and "train.py" not in cmd:
+                    self._noop_tool_calls += 1
 
-            # Truncate long output
-            if response.text and len(response.text) > self.max_tool_response_length:
-                text = response.text
-                if self.tool_response_truncate_side == "left":
-                    text = text[:self.max_tool_response_length] + "...(truncated)"
-                elif self.tool_response_truncate_side == "right":
-                    text = "(truncated)..." + text[-self.max_tool_response_length:]
-                else:
-                    half = self.max_tool_response_length // 2
-                    text = text[:half] + "...(truncated)..." + text[-half:]
-                response = ToolResponse(text=text)
+                response, reward, metrics = await bash_tool.execute(
+                    instance_id, tool_args, agent_data=agent_data
+                )
 
-            return response, reward, metrics
+                # Truncate long output
+                if response.text and len(response.text) > self.max_tool_response_length:
+                    text = response.text
+                    if self.tool_response_truncate_side == "left":
+                        text = text[:self.max_tool_response_length] + "...(truncated)"
+                    elif self.tool_response_truncate_side == "right":
+                        text = "(truncated)..." + text[-self.max_tool_response_length:]
+                    else:
+                        half = self.max_tool_response_length // 2
+                        text = text[:half] + "...(truncated)..." + text[-half:]
+                    response = ToolResponse(text=text)
+
+                return response, reward, metrics
+            except Exception as e:
+                logger.warning(f"Error when executing bash tool: {e}")
+                return ToolResponse(text=f"Error when executing tool: {e}"), 0.0, {}
         else:
             # For any other tool, use default create/execute/release per call
             return await super()._call_tool(tool_call, tools_kwargs, agent_data)
