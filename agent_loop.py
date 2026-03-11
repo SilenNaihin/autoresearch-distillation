@@ -244,23 +244,15 @@ class AutoresearchAgentLoop(ToolAgentLoop):
                 notes.append("Warning: You did not use chain of thought. You must reason step-by-step inside <think> tags before making changes.")
             notes_text = "\n".join(notes)
 
-        from environment import compute_reward, parse_metrics
+        from environment import BASELINE_VAL_BPB, compute_reward, parse_metrics
 
         if baseline == modified:
             if self._sed_failed:
                 feedback = (f"FAILURE: your sed command failed: {self._sed_failed}\n\n"
-                            "You must specify the target file. Example:\n"
-                            "<tool_call>\n"
-                            "{\"name\": \"bash\", \"arguments\": {\"command\": \"sed -i "
-                            "'s/WEIGHT_DECAY = 0.2/WEIGHT_DECAY = 0.1/' train.py\"}}\n"
-                            "</tool_call>")
+                            "You must specify the target file and ensure the pattern matches exactly.")
             else:
                 feedback = ("FAILURE: train.py was unchanged from the original. No experiment was run.\n\n"
-                            "You MUST modify train.py to lower val_bpb. Example:\n"
-                            "<tool_call>\n"
-                            "{\"name\": \"bash\", \"arguments\": {\"command\": \"sed -i "
-                            "'s/WEIGHT_DECAY = 0.2/WEIGHT_DECAY = 0.1/' train.py\"}}\n"
-                            "</tool_call>")
+                            "You MUST modify train.py to lower val_bpb.")
             return 0.0, f"{feedback}\n\n{notes_text}" if notes_text else feedback
 
         # Dispatch to GPU fleet (blocking I/O → run in thread)
@@ -282,14 +274,17 @@ class AutoresearchAgentLoop(ToolAgentLoop):
                 parts.append(output.stdout.strip()[-1000:])
             crash_info = "\n".join(parts) if parts else "no output"
             logger.warning(f"Experiment crashed (exit {output.returncode}): {crash_info}")
-            feedback = f"Changes:\n{diff_text}\n\nExperiment crashed (exit {output.returncode}):\n{crash_info}"
+            feedback = (f"Changes from previous attempt:\n{diff_text}\n\n"
+                        f"These changes caused the experiment to crash (exit {output.returncode}):\n{crash_info}\n\n"
+                        f"Do not repeat changes that didn't work.")
             return 0.0, f"{feedback}\n\n{notes_text}" if notes_text else feedback
         val_bpb = metrics.get("val_bpb")
 
         if val_bpb is None:
             tail = "\n".join(output.stdout.strip().splitlines()[-20:]) if output.stdout else "empty output"
             logger.warning(f"No val_bpb in experiment output. Tail:\n{tail}")
-            feedback = f"Changes:\n{diff_text}\n\nExperiment ran but produced no val_bpb metric. Output tail:\n{tail}"
+            feedback = (f"Changes from previous attempt:\n{diff_text}\n\n"
+                        f"We were not able to run your experiment. Output tail:\n{tail}")
             return 0.0, f"{feedback}\n\n{notes_text}" if notes_text else feedback
 
         with self._best_lock:
@@ -299,5 +294,8 @@ class AutoresearchAgentLoop(ToolAgentLoop):
 
         logger.info(f"Experiment: val_bpb={val_bpb}, reward={reward:.4f}, status={status}")
         metrics_line = " | ".join(f"{k}: {metrics[k]:g}" for k in ("num_steps", "num_params_M", "peak_vram_mb", "mfu_percent"))
-        feedback = f"Changes:\n{diff_text}\n\n{reward_feedback}\n{metrics_line}"
+        degradation = val_bpb - BASELINE_VAL_BPB
+        if degradation > 0.05:
+            reward_feedback += f" These changes made validation loss significantly worse (degraded by {degradation:.6f})."
+        feedback = f"Changes from previous attempt:\n{diff_text}\n\n{reward_feedback}\n{metrics_line}"
         return reward, f"{feedback}\n\n{notes_text}" if notes_text else feedback

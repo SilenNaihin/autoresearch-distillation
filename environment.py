@@ -40,5 +40,5 @@ def compute_reward(val_bpb: float | None, best_val_bpb: float = None) -> tuple[f
         return 0.0, "crash", "No val_bpb in output."
     reward = max(0.0, BASELINE_VAL_BPB - val_bpb)
     if reward > 0:
-        return reward, "improvement", f"val_bpb={val_bpb:.6f} (baseline={BASELINE_VAL_BPB}, improved by {reward:.6f})"
-    return 0.0, "no_improvement", f"val_bpb={val_bpb:.6f} (baseline={BASELINE_VAL_BPB}, no improvement)"
+        return reward, "improvement", f"val_bpb={val_bpb:.6f} (baseline={BASELINE_VAL_BPB}, delta={-reward:.6f})"
+    return 0.0, "no_improvement", f"val_bpb={val_bpb:.6f} (baseline={BASELINE_VAL_BPB}, delta=+{val_bpb - BASELINE_VAL_BPB:.6f})"

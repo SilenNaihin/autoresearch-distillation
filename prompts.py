@@ -20,7 +20,6 @@ pandas, pyarrow, requests, rustbpe, tiktoken.
 
 ## Hardware constraints
 - The experiment GPU has 93 GB VRAM (H100 SXM). The default config uses ~72 GB, leaving ~20 GB headroom.
-- Doubling ASPECT_RATIO or significantly increasing depth WILL cause OOM. Prefer optimizer/LR/schedule changes.
 - FlashAttention 3 (Hopper) requires head_dim to be a power of 2 (64, 128, 256). Other values crash.
 - TOTAL_BATCH_SIZE must be divisible by (DEVICE_BATCH_SIZE * sequence_length). \
 Violating this triggers an assertion error.
@@ -29,7 +28,7 @@ Violating this triggers an assertion error.
 1. Think step-by-step about what changes could lower val_bpb (architecture, hyperparameters, optimization, etc.)
 2. Make targeted edits to train.py using sed. Do not rewrite the entire file. Example:
    <tool_call>
-   {"name": "bash", "arguments": {"command": "sed -i 's/# TODO: optimize/# optimized/' train.py"}}
+   {"name": "bash", "arguments": {"command": "sed -i 's/OLD_VALUE/NEW_VALUE/' train.py"}}
    </tool_call>
 3. When complete, submit: echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT
 
