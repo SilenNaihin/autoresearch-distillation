@@ -32,7 +32,7 @@ class GPUSlot:
     remote_dir: str = "~/autoresearch"
 
 
-# Default fleet — 7 experiment GPUs (6 H100 + 1 A100 backup)
+# Default fleet — 5 experiment GPUs
 # box3 reserved for vLLM inference / SDPO training, not available for experiments.
 # Each GPU gets its own remote_dir to avoid file races on 2-GPU boxes.
 FLEET = [
@@ -46,8 +46,8 @@ FLEET = [
     # h100-dev-box-5: 2x H100 — separate dirs per GPU
     GPUSlot("h100-dev-box-5",  "0", "box5-gpu0", "~/autoresearch-gpu0"),
     GPUSlot("h100-dev-box-5",  "1", "box5-gpu1", "~/autoresearch-gpu1"),
-    # a100-backup-1: 1x A100 80GB PCIe (backup)
-    GPUSlot("a100-backup-1",   "0", "a100-gpu0", "~/autoresearch"),
+    # a100-backup-1: 1x A100 80GB PCIe — down as of 2026-03-10 (DNS unreachable)
+    # GPUSlot("a100-backup-1",   "0", "a100-gpu0", "~/autoresearch"),
 ]
 
 
