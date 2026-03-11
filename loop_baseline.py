@@ -77,11 +77,17 @@ def format_feedback_prompt(turn_results: list[dict]) -> str:
     # Summary line
     if successful:
         best = successful[0]["val_bpb"]
-        parts.append(
-            f"**The unmodified train.py achieves val_bpb={BASELINE_VAL_BPB}. "
-            f"Your best so far: val_bpb={best:.4f}. "
-            f"Make changes to train.py to push this as low as you can.**"
-        )
+        if best < BASELINE_VAL_BPB:
+            parts.append(
+                f"**The unmodified train.py achieves val_bpb={BASELINE_VAL_BPB}. "
+                f"Your best so far: val_bpb={best:.4f}. "
+                f"Make changes to train.py to push this as low as you can.**"
+            )
+        else:
+            parts.append(
+                f"**The unmodified train.py achieves val_bpb={BASELINE_VAL_BPB}. "
+                f"Make changes to train.py to push this as low as you can.**"
+            )
 
     # Top-K best results with full diffs
     top_k = successful[:TOP_K_FULL_DIFFS]
