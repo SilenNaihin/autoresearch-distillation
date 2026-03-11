@@ -29,7 +29,7 @@ Violating this triggers an assertion error.
 1. Think step-by-step about what changes could lower val_bpb (architecture, hyperparameters, optimization, etc.)
 2. Make targeted edits to train.py using sed. Do not rewrite the entire file. Example:
    <tool_call>
-   {"name": "bash", "arguments": {"command": "sed -i 's/MATRIX_LR = 0.04/MATRIX_LR = 0.06/' train.py"}}
+   {"name": "bash", "arguments": {"command": "sed -i 's/# TODO: optimize/# optimized/' train.py"}}
    </tool_call>
 3. When complete, submit: echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT
 
