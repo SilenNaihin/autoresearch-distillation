@@ -207,7 +207,7 @@ def main():
     parser.add_argument("--max-turns", type=int, default=30)
     parser.add_argument("--step-limit", type=int, default=20,
                         help="Max bash tool calls per episode (same as SDPO)")
-    parser.add_argument("--temperature", type=float, default=0.7)
+    parser.add_argument("--temperature", type=float, default=1.0)
     parser.add_argument("--vllm-base-url", type=str, default=VLLM_BASE_URL)
     parser.add_argument("--run-name", type=str, default="qwen3-14b-baseline")
     parser.add_argument("--seed", type=int, default=0)
