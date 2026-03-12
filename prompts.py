@@ -18,29 +18,10 @@ pandas, pyarrow, requests, rustbpe, tiktoken.
 - Do not modify the evaluation harness. The evaluate_bpb function in prepare.py is the ground truth.
 - VRAM is a soft constraint. Some increase is OK for meaningful val_bpb gains.
 
-## Hardware constraints
-- The experiment GPU has 93 GB VRAM (H100 SXM). The default config uses ~45 GB at depth=8.
-- VRAM scales with model size. If you increase depth or width, you may need to reduce \
-DEVICE_BATCH_SIZE to compensate. Check that your changes fit in ~85 GB.
-- FlashAttention 3 (Hopper) requires head_dim to be a power of 2 (64, 128, 256). Other values crash.
-- TOTAL_BATCH_SIZE must be divisible by (DEVICE_BATCH_SIZE * sequence_length). \
-Violating this triggers an assertion error.
-
-## Tips
-- The training budget is fixed at 5 minutes. A configuration that processes more training steps \
-in the same time may outperform a larger model that trains fewer steps.
-
 ## Workflow
-1. Read the full file — optimizer internals, model architecture, training loop — to find all the levers. \
-Think step-by-step about what changes could lower val_bpb
-2. You can search the web for ML techniques and papers:
-   python3 search.py "muon optimizer optimal hyperparameters"
-   python3 search.py --fetch "url"   # read a specific page
-3. Make targeted edits to train.py using sed. Do not rewrite the entire file. Example:
-   <tool_call>
-   {"name": "bash", "arguments": {"command": "sed -i 's/OLD_VALUE/NEW_VALUE/' train.py"}}
-   </tool_call>
-4. When complete, submit: echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT
+1. Think step-by-step about what changes could lower val_bpb (architecture, hyperparameters, optimization, etc.)
+2. Make targeted edits using sed. Do not rewrite the entire file.
+3. When complete, submit: echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT
 
 ## Important
 - You are ONLY editing the file. You do NOT run experiments.
@@ -61,9 +42,8 @@ def build_instance_prompt(train_py_content: str, history_lines: list[str]) -> st
             "Build on ideas that improved val_bpb."
         )
     parts.append(
-        "You may make a single focused change or combine related changes if they work together. "
-        "Feel free to try completely new approaches and explore new spaces every once in a while. "
-        "Be reasonable on effort towards pushing and tweaking a result vs trying something different. "
+        "Prefer a single focused change to train.py to lower val_bpb, "
+        "but you may combine related changes if they work together. "
         "You must apply your changes directly using the bash tool — do not just output a diff."
     )
     return "\n\n".join(parts)

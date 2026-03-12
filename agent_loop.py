@@ -18,7 +18,6 @@ the model's bash commands, not environment output.
 """
 
 import asyncio
-import hashlib
 import json
 import logging
 import os
@@ -89,8 +88,6 @@ class AutoresearchAgentLoop(ToolAgentLoop):
         self._best_val_bpb = float("inf")
         self._best_lock = threading.Lock()
         self._behavioral_feedback = behavioral_feedback
-        self._sed_failed: str | None = None  # tracked but no longer triggers early termination
-        self._seen_diffs: set[str] = set()
 
     async def run(self, sampling_params: dict[str, Any], **kwargs) -> AgentLoopOutput:
         """Override run() to add pre-creation and post-submission logic."""
@@ -98,7 +95,6 @@ class AutoresearchAgentLoop(ToolAgentLoop):
         self._total_tool_calls = 0
         self._failed_tool_calls = 0  # malformed JSON, errors
         self._noop_tool_calls = 0    # commands that don't touch train.py
-        self._sed_failed = None
 
         # Pre-create persistent bash tool instance
         bash_tool = self.tools.get("bash")
@@ -113,19 +109,6 @@ class AutoresearchAgentLoop(ToolAgentLoop):
         try:
             # Run the standard ToolAgentLoop state machine
             output = await super().run(sampling_params, **kwargs)
-
-            # Detect empty chain of thought (e.g. "<think>\n</think>")
-            self._empty_thinking = False
-            try:
-                # Decode just the first 50 tokens to check for thinking
-                prefix = self.tokenizer.decode(output.response_ids[:50], skip_special_tokens=False)
-                think_start = prefix.find("<think>")
-                think_end = prefix.find("</think>")
-                if think_start >= 0 and think_end > think_start:
-                    think_content = prefix[think_start + len("<think>"):think_end].strip()
-                    self._empty_thinking = len(think_content) < 20
-            except Exception:
-                pass
 
             # Post-submission: dispatch experiment to GPU fleet
             reward, feedback = await self._dispatch_experiment(bash_tool, instance_id)
@@ -171,45 +154,30 @@ class AutoresearchAgentLoop(ToolAgentLoop):
                 self._total_tool_calls += 1
                 return ToolResponse(text="Error: invalid JSON in tool arguments"), 0.0, {}
 
-            if not isinstance(tool_args, dict):
-                self._failed_tool_calls += 1
-                self._total_tool_calls += 1
-                return ToolResponse(text="Error: tool arguments must be a JSON object"), 0.0, {}
+            self._total_tool_calls += 1
+            cmd = tool_args.get("command", "")
+            # Track commands that likely don't modify train.py
+            cmd_stripped = cmd.strip().split()[0] if cmd.strip() else ""
+            if cmd_stripped and cmd_stripped not in self._TRAIN_PY_CMDS and "train.py" not in cmd:
+                self._noop_tool_calls += 1
 
-            try:
-                self._total_tool_calls += 1
-                cmd = tool_args.get("command", "")
-                # Track commands that likely don't modify train.py
-                cmd_stripped = cmd.strip().split()[0] if cmd.strip() else ""
-                if cmd_stripped and cmd_stripped not in self._TRAIN_PY_CMDS and "train.py" not in cmd:
-                    self._noop_tool_calls += 1
+            response, reward, metrics = await bash_tool.execute(
+                instance_id, tool_args, agent_data=agent_data
+            )
 
-                response, reward, metrics = await bash_tool.execute(
-                    instance_id, tool_args, agent_data=agent_data
-                )
+            # Truncate long output
+            if response.text and len(response.text) > self.max_tool_response_length:
+                text = response.text
+                if self.tool_response_truncate_side == "left":
+                    text = text[:self.max_tool_response_length] + "...(truncated)"
+                elif self.tool_response_truncate_side == "right":
+                    text = "(truncated)..." + text[-self.max_tool_response_length:]
+                else:
+                    half = self.max_tool_response_length // 2
+                    text = text[:half] + "...(truncated)..." + text[-half:]
+                response = ToolResponse(text=text)
 
-                # Detect sed failures (no input files, bad expression, etc.)
-                # All sed errors produce output starting with "sed:"; success is silent.
-                resp_text = (response.text or "").strip()
-                if cmd_stripped == "sed" and "sed:" in resp_text:
-                    self._sed_failed = resp_text
-
-                # Truncate long output
-                if response.text and len(response.text) > self.max_tool_response_length:
-                    text = response.text
-                    if self.tool_response_truncate_side == "left":
-                        text = text[:self.max_tool_response_length] + "...(truncated)"
-                    elif self.tool_response_truncate_side == "right":
-                        text = "(truncated)..." + text[-self.max_tool_response_length:]
-                    else:
-                        half = self.max_tool_response_length // 2
-                        text = text[:half] + "...(truncated)..." + text[-half:]
-                    response = ToolResponse(text=text)
-
-                return response, reward, metrics
-            except Exception as e:
-                logger.warning(f"Error when executing bash tool: {e}")
-                return ToolResponse(text=f"Error when executing tool: {e}"), 0.0, {}
+            return response, reward, metrics
         else:
             # For any other tool, use default create/execute/release per call
             return await super()._call_tool(tool_call, tools_kwargs, agent_data)
@@ -242,29 +210,12 @@ class AutoresearchAgentLoop(ToolAgentLoop):
                 notes.append(f"Warning: {self._noop_tool_calls} of {self._total_tool_calls} tool calls did not modify train.py.")
             if self._failed_tool_calls > 0:
                 notes.append(f"Warning: {self._failed_tool_calls} tool calls had malformed arguments.")
-            if self._empty_thinking:
-                notes.append("Warning: You did not use chain of thought. You must reason step-by-step inside <think> tags before making changes.")
             notes_text = "\n".join(notes)
 
-        from environment import BASELINE_VAL_BPB, compute_reward, parse_metrics
+        from environment import compute_reward, parse_metrics
 
         if baseline == modified:
-            if self._sed_failed:
-                feedback = (f"FAILURE: your sed command failed: {self._sed_failed}\n\n"
-                            "You must specify the target file and ensure the pattern matches exactly.")
-            else:
-                feedback = "This exact set of changes has been tried before. Try a different approach."
-            return 0.0, f"{feedback}\n\n{notes_text}" if notes_text else feedback
-
-        # Novelty tracking: encourage diverse exploration via teacher feedback
-        diff_hash = hashlib.sha256(diff_text.encode()).hexdigest()
-        is_novel = diff_hash not in self._seen_diffs
-        self._seen_diffs.add(diff_hash)
-        if is_novel:
-            novelty_text = "Continue to try new creative attempts."
-        else:
-            novelty_text = "This exact set of changes has been tried before. Try a different approach."
-        notes_text = f"{notes_text}\n{novelty_text}" if notes_text else novelty_text
+            return 0.0, f"Changes:\n{diff_text}\n\n{notes_text}"
 
         # Dispatch to GPU fleet (blocking I/O → run in thread)
         pool = _get_pool()
@@ -285,17 +236,15 @@ class AutoresearchAgentLoop(ToolAgentLoop):
                 parts.append(output.stdout.strip()[-1000:])
             crash_info = "\n".join(parts) if parts else "no output"
             logger.warning(f"Experiment crashed (exit {output.returncode}): {crash_info}")
-            feedback = (f"Changes from previous attempt:\n{diff_text}\n\n"
-                        f"These changes caused the experiment to crash (exit {output.returncode}):\n{crash_info}")
+            feedback = f"Changes:\n{diff_text}\n\nExperiment crashed (exit {output.returncode}):\n{crash_info}"
             return 0.0, f"{feedback}\n\n{notes_text}" if notes_text else feedback
         val_bpb = metrics.get("val_bpb")
 
         if val_bpb is None:
             tail = "\n".join(output.stdout.strip().splitlines()[-20:]) if output.stdout else "empty output"
             logger.warning(f"No val_bpb in experiment output. Tail:\n{tail}")
-            feedback = (f"Changes from previous attempt:\n{diff_text}\n\n"
-                        f"We were not able to run your experiment. Output tail:\n{tail}")
-            return 0.0, feedback
+            feedback = f"Changes:\n{diff_text}\n\nExperiment ran but produced no val_bpb metric. Output tail:\n{tail}"
+            return 0.0, f"{feedback}\n\n{notes_text}" if notes_text else feedback
 
         with self._best_lock:
             reward, status, reward_feedback = compute_reward(val_bpb, self._best_val_bpb)
@@ -303,9 +252,5 @@ class AutoresearchAgentLoop(ToolAgentLoop):
                 self._best_val_bpb = val_bpb
 
         logger.info(f"Experiment: val_bpb={val_bpb}, reward={reward:.4f}, status={status}")
-        metrics_line = " | ".join(f"{k}: {metrics[k]:g}" for k in ("num_steps", "num_params_M", "peak_vram_mb", "mfu_percent"))
-        degradation = val_bpb - BASELINE_VAL_BPB
-        if degradation > 0.05:
-            reward_feedback += f" These changes made validation loss significantly worse (degraded by {degradation:.6f})."
-        feedback = f"Changes from previous attempt:\n{diff_text}\n\n{reward_feedback}\n{metrics_line}"
+        feedback = f"Changes:\n{diff_text}\n\n{reward_feedback}"
         return reward, f"{feedback}\n\n{notes_text}" if notes_text else feedback
