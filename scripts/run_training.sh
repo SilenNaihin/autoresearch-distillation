@@ -17,7 +17,7 @@ if [ -f "$PROJECT_ROOT/.env" ]; then
 fi
 
 # Defaults
-EXPERIMENT_NAME="${1:-qwen3-14b-sdpo}"
+EXPERIMENT_NAME="${1:-qwen3-32b-sdpo-lora}"
 
 export RAY_TMPDIR=/data/tmp
 export TMPDIR=/data/tmp
@@ -52,7 +52,7 @@ import json, glob, os
 target_max_pos = int(os.environ.get('TARGET_MAX_POSITION_EMBEDDINGS', '65536'))
 target_orig = 32768
 target_factor = float(target_max_pos) / float(target_orig)
-for p in glob.glob(os.path.expanduser('~/.cache/huggingface/hub/models--Qwen--Qwen3-14B/snapshots/*/config.json')):
+for p in glob.glob(os.path.expanduser('~/.cache/huggingface/hub/models--Qwen--Qwen3-32B/snapshots/*/config.json')):
     real = os.path.realpath(p)
     with open(real) as f: c = json.load(f)
     changed = False

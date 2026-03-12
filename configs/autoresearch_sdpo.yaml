@@ -1,4 +1,5 @@
 # SDPO config for autoresearch on 2 GPUs (colocated vLLM + FSDP2)
+# Qwen3-32B with LoRA (rank=32, alpha=64)
 # Inherits from sdpo.yaml -> ppo_trainer.yaml -> user.yaml
 # Usage: bash scripts/run_training.sh
 
@@ -22,8 +23,13 @@ data:
 
 actor_rollout_ref:
   model:
-    path: Qwen/Qwen3-14B
+    path: Qwen/Qwen3-32B
     trust_remote_code: True
+    enable_gradient_checkpointing: True
+    use_shm: True
+    lora_rank: 32
+    lora_alpha: 64
+    target_modules: all-linear
     override_config:
       attn_implementation: flash_attention_2
   actor:
@@ -36,6 +42,7 @@ actor_rollout_ref:
     fsdp_config:
       strategy: fsdp2
       offload_policy: true
+      param_offload: True
       ulysses_sequence_parallel_size: 2
     policy_loss:
       loss_mode: sdpo
@@ -60,7 +67,7 @@ actor_rollout_ref:
 
         Using the information above, provide the best possible solution.
     optim:
-      lr: 1e-5
+      lr: 5e-5
   rollout:
     name: vllm
     n: 1
@@ -70,6 +77,8 @@ actor_rollout_ref:
     max_model_len: ${max_model_len}
     max_num_batched_tokens: ${max_model_len}
     calculate_log_probs: True
+    load_format: safetensors
+    layered_summon: True
     engine_kwargs:
       vllm:
         hf_overrides:
@@ -108,7 +117,7 @@ critic:
     strategy: fsdp2
     ulysses_sequence_parallel_size: 2
   model:
-    path: Qwen/Qwen3-14B
+    path: Qwen/Qwen3-32B
 
 custom_reward_function:
   path: ${vars.dir}/reward.py
@@ -118,7 +127,7 @@ reward_model:
 
 trainer:
   project_name: autoresearch-sdpo
-  experiment_name: qwen3-14b-sdpo
+  experiment_name: qwen3-32b-sdpo-lora
   n_gpus_per_node: 2
   nnodes: 1
   total_epochs: 60
