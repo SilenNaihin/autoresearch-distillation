@@ -25,7 +25,6 @@ actor_rollout_ref:
   model:
     path: Qwen/Qwen3-32B
     trust_remote_code: True
-    enable_gradient_checkpointing: True
     use_shm: True
     lora_rank: 32
     lora_alpha: 64
