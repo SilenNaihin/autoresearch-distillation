@@ -40,7 +40,7 @@ actor_rollout_ref:
     policy_loss:
       loss_mode: sdpo
     self_distillation:
-      teacher_update_rate: 0.0
+      teacher_update_rate: 0.05
       max_reprompt_len: 10240
       is_clip: 2.0
       alpha: 0.5
