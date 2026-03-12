@@ -33,11 +33,14 @@ in the same time may outperform a larger model that trains fewer steps.
 ## Workflow
 1. Read the full file — optimizer internals, model architecture, training loop — to find all the levers. \
 Think step-by-step about what changes could lower val_bpb
-2. Make targeted edits to train.py using sed. Do not rewrite the entire file. Example:
+2. You can search the web for ML techniques and papers:
+   python3 search.py "muon optimizer optimal hyperparameters"
+   python3 search.py --fetch "url"   # read a specific page
+3. Make targeted edits to train.py using sed. Do not rewrite the entire file. Example:
    <tool_call>
    {"name": "bash", "arguments": {"command": "sed -i 's/OLD_VALUE/NEW_VALUE/' train.py"}}
    </tool_call>
-3. When complete, submit: echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT
+4. When complete, submit: echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT
 
 ## Important
 - You are ONLY editing the file. You do NOT run experiments.

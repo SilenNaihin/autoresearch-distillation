@@ -39,6 +39,10 @@ def create_isolated_workdir(autoresearch_dir: str = "autoresearch") -> str:
     tmpdir = tempfile.mkdtemp(prefix="autoresearch_workdir_", dir="/data/tmp")
     shutil.copytree(src, tmpdir, dirs_exist_ok=True,
                     ignore=shutil.ignore_patterns("__pycache__", ".git", "*.pyc", ".venv"))
+    # Copy search.py helper if it exists
+    search_py = os.path.join(os.path.dirname(__file__), "search.py")
+    if os.path.exists(search_py):
+        shutil.copy2(search_py, os.path.join(tmpdir, "search.py"))
     return tmpdir
 
 
