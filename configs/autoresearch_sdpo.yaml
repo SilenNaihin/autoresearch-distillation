@@ -81,7 +81,7 @@ actor_rollout_ref:
       enable: True
       max_user_turns: 10
       max_assistant_turns: 10
-      max_parallel_calls: 1
+      max_parallel_calls: 5
       max_tool_response_length: 10000
       tool_response_truncate_side: right
       tool_config_path: ${vars.dir}/configs/bash_tool_config.yaml
