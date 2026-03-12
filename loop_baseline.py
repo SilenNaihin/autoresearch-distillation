@@ -254,6 +254,60 @@ def extract_trajectory_summary(trajectory: list[dict], max_len: int = 500) -> st
     return ""
 
 
+def extract_model_thinking(trajectory: list[dict], max_len: int = 1000) -> str:
+    """Extract the <think> block from the first assistant message."""
+    for msg in trajectory:
+        if msg.get("role") == "assistant":
+            content = msg.get("content", "")
+            if isinstance(content, str):
+                start = content.find("<think>")
+                end = content.find("</think>")
+                if start >= 0 and end > start:
+                    think = content[start + len("<think>"):end].strip()
+                    if len(think) > max_len:
+                        think = think[:max_len] + "..."
+                    return think
+    return ""
+
+
+def count_sed_commands(trajectory: list[dict]) -> int:
+    """Count how many sed commands the model issued."""
+    count = 0
+    traj_str = str(trajectory)
+    # Count occurrences of sed in tool call commands
+    for msg in trajectory:
+        extras = msg.get("extra", {})
+        if isinstance(extras, str):
+            if "'command': \"sed " in extras or "'command': 'sed " in extras:
+                count += 1
+        elif isinstance(extras, dict):
+            actions = extras.get("actions", [])
+            if isinstance(actions, list):
+                for a in actions:
+                    if isinstance(a, dict) and str(a.get("command", "")).strip().startswith("sed"):
+                        count += 1
+    # Fallback: count in raw string if structured parsing missed them
+    if count == 0:
+        count = traj_str.count("sed -i") + traj_str.count("sed -e")
+    return count
+
+
+def extract_changed_variables(diff_text: str) -> list[str]:
+    """Extract variable names that were changed from a unified diff."""
+    changed = []
+    # Common config variables in train.py
+    known_vars = [
+        "DEVICE_BATCH_SIZE", "TOTAL_BATCH_SIZE", "MATRIX_LR", "SCALAR_LR",
+        "depth", "width", "num_heads", "head_dim", "ASPECT_RATIO",
+        "WINDOW_PATTERN", "sequence_length", "warmup_steps", "cooldown_fraction",
+        "muon_momentum", "weight_decay", "VOCAB_SIZE", "NUM_LAYERS",
+    ]
+    for var in known_vars:
+        if var in diff_text:
+            changed.append(var)
+    return changed
+
+
 def dispatch_experiment(train_py: str) -> tuple[dict, int, str]:
     """Dispatch modified train.py to experiment GPU.
 
@@ -352,6 +406,13 @@ def main():
     wandb.init(project="autoresearch-baseline", name=args.run_name, config=config)
     log_jsonl(output_path, {"config": config})
 
+    # Wandb table for per-turn details (diffs, thinking, crash info)
+    turns_table = wandb.Table(columns=[
+        "turn", "status", "val_bpb", "reward", "diff", "crash_reason",
+        "model_thinking", "used_search", "num_sed_commands", "changed_variables",
+        "agent_time", "experiment_time", "prompt_len", "trajectory_len",
+    ])
+
     # Multi-turn loop
     best_val_bpb = float("inf")
     turn_results: list[dict] = []
@@ -423,6 +484,9 @@ def main():
         used_search = "search.py" in str(trajectory)
         diff_size = len(diff_text)
 
+        model_thinking = extract_model_thinking(trajectory)
+        num_sed = count_sed_commands(trajectory)
+
         print(f"  Tool calls: {n_tool_calls}")
         print(f"  Diff size:  {diff_size} chars")
         print(f"  Agent time: {agent_time:.1f}s  Trajectory: {trajectory_len} msgs  Search: {used_search}")
@@ -437,6 +501,11 @@ def main():
                 "status": "no_changes",
                 "crash_reason": "no changes made to train.py",
             })
+            turns_table.add_data(
+                turn, "no_changes", None, 0.0, "", "no changes made",
+                model_thinking, used_search, num_sed, "",
+                agent_time, 0.0, len(instance_prompt), trajectory_len,
+            )
             wandb.log({"turn": turn, "status": "no_changes", "reward": 0.0,
                         "tool_calls": n_tool_calls, "prompt_len": len(instance_prompt),
                         "trajectory_len": trajectory_len, "used_search": used_search,
@@ -462,6 +531,11 @@ def main():
                 "status": "duplicate",
                 "crash_reason": "exact same changes already tried — try something different",
             })
+            turns_table.add_data(
+                turn, "duplicate", None, 0.0, diff_text, "duplicate diff",
+                model_thinking, used_search, num_sed, ", ".join(extract_changed_variables(diff_text)),
+                agent_time, 0.0, len(instance_prompt), trajectory_len,
+            )
             wandb.log({"turn": turn, "status": "duplicate", "reward": 0.0,
                         "tool_calls": n_tool_calls, "prompt_len": len(instance_prompt),
                         "trajectory_len": trajectory_len, "used_search": used_search,
@@ -496,6 +570,11 @@ def main():
                 "crash_reason": crash_reason,
             })
             cumulative_crashes += 1
+            turns_table.add_data(
+                turn, status, None, 0.0, diff_text, crash_reason,
+                model_thinking, used_search, num_sed, ", ".join(extract_changed_variables(diff_text)),
+                agent_time, experiment_time, len(instance_prompt), trajectory_len,
+            )
             wandb.log({"turn": turn, "status": status, "reward": 0.0,
                         "experiment_time": experiment_time, "tool_calls": n_tool_calls,
                         "prompt_len": len(instance_prompt),
@@ -534,6 +613,11 @@ def main():
         })
 
         cumulative_successes += 1
+        turns_table.add_data(
+            turn, status, val_bpb, reward, diff_text, "",
+            model_thinking, used_search, num_sed, ", ".join(extract_changed_variables(diff_text)),
+            agent_time, experiment_time, len(instance_prompt), trajectory_len,
+        )
         print(f"  val_bpb={val_bpb:.6f}  best={best_val_bpb:.6f}  "
               f"reward={reward:.4f}  status={status}  time={experiment_time:.0f}s")
 
@@ -565,8 +649,11 @@ def main():
     print(f"Best val_bpb: {best_val_bpb:.6f} (baseline: {BASELINE_VAL_BPB})")
     print(f"Output: {output_path}")
 
-    wandb.log({"final/best_val_bpb": best_val_bpb,
-               "final/improvement": max(0, BASELINE_VAL_BPB - best_val_bpb)})
+    wandb.log({
+        "final/best_val_bpb": best_val_bpb,
+        "final/improvement": max(0, BASELINE_VAL_BPB - best_val_bpb),
+        "turns_table": turns_table,
+    })
     wandb.finish()
 
 
