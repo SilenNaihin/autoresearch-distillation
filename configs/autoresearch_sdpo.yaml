@@ -72,7 +72,7 @@ actor_rollout_ref:
     n: 1
     temperature: 1.0
     tensor_model_parallel_size: 2
-    gpu_memory_utilization: 0.85
+    gpu_memory_utilization: 0.9
     max_model_len: ${max_model_len}
     max_num_batched_tokens: ${max_model_len}
     calculate_log_probs: True
@@ -107,15 +107,7 @@ algorithm:
     rollout_is_threshold: 2.0
 
 critic:
-  strategy: fsdp2
-  ulysses_sequence_parallel_size: 2
-  use_dynamic_bsz: False
-  ppo_micro_batch_size_per_gpu: 1
-  fsdp_config:
-    strategy: fsdp2
-    ulysses_sequence_parallel_size: 2
-  model:
-    path: Qwen/Qwen3-32B
+  enable: false
 
 custom_reward_function:
   path: ${vars.dir}/reward.py

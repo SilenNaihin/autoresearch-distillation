@@ -21,6 +21,7 @@ EXPERIMENT_NAME="${1:-qwen3-32b-sdpo-lora}"
 
 export RAY_TMPDIR=/data/tmp
 export TMPDIR=/data/tmp
+export RAY_memory_usage_threshold=0.98
 CONFIG_NAME="autoresearch_sdpo"
 DATA_DIR="$PROJECT_ROOT/data/autoresearch"
 
@@ -81,6 +82,13 @@ export PYTHONPATH="$SDPO_ROOT:$PROJECT_ROOT:${PYTHONPATH:-}"
 export PATH="$HOME/.local/bin:$PATH"
 
 cd "$SDPO_ROOT"
+
+# Clean up stale processes and free memory before launch
+echo "Cleaning up stale processes and freeing memory..."
+ray stop --force 2>/dev/null || true
+$PYTHON -c "import torch; torch.cuda.empty_cache()" 2>/dev/null || true
+sync && echo 3 | sudo tee /proc/sys/vm/drop_caches 2>/dev/null || true
+$PYTHON -c "import gc; gc.collect()" 2>/dev/null || true
 
 echo "============================================"
 echo "  SDPO Training: Autoresearch"
