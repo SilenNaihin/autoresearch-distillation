@@ -416,7 +416,7 @@ def main():
     # Multi-turn loop
     best_val_bpb = float("inf")
     turn_results: list[dict] = []
-    seen_diffs: set[str] = set()
+    seen_diffs: dict[str, dict] = {}  # diff_hash -> cached result dict
     best_trajectory_summary: str = ""
     cumulative_crashes = 0
     cumulative_successes = 0
@@ -520,37 +520,44 @@ def main():
                                     "agent_time": agent_time})
             continue
 
-        # Dedup: skip if we've seen this exact diff before
+        # Cache: replay cached result if we've seen this exact diff before
         diff_hash = hashlib.sha256(diff_text.encode()).hexdigest()
-        if diff_hash in seen_diffs:
-            print(f"  Status: duplicate (skipping experiment)")
+        cached = seen_diffs.get(diff_hash)
+        if cached is not None:
+            c_status = cached.get("status", "duplicate")
+            c_vbpb = cached.get("val_bpb")
+            print(f"  Status: cached ({c_status}, val_bpb={c_vbpb})")
             turn_results.append({
                 "turn": turn,
-                "val_bpb": None,
+                "val_bpb": c_vbpb,
                 "diff": diff_text,
-                "status": "duplicate",
-                "crash_reason": "exact same changes already tried — try something different",
+                "status": "cached_" + c_status,
+                "crash_reason": cached.get("crash_reason", "exact same changes already tried"),
+                "depth": cached.get("depth"),
+                "tokens_M": cached.get("tokens_M"),
+                "memory_gb": cached.get("memory_gb"),
             })
             turns_table.add_data(
-                turn, "duplicate", None, 0.0, diff_text, "duplicate diff",
+                turn, "cached_" + c_status, c_vbpb, 0.0, diff_text, "cached result",
                 model_thinking, used_search, num_sed, ", ".join(extract_changed_variables(diff_text)),
                 agent_time, 0.0, len(instance_prompt), trajectory_len,
             )
-            wandb.log({"turn": turn, "status": "duplicate", "reward": 0.0,
+            wandb.log({"turn": turn, "status": "cached_" + c_status, "reward": 0.0,
+                        "val_bpb": c_vbpb,
                         "tool_calls": n_tool_calls, "prompt_len": len(instance_prompt),
                         "trajectory_len": trajectory_len, "used_search": used_search,
                         "agent_time": agent_time, "diff_size": diff_size,
                         "is_duplicate": True, "is_novel": False,
                         "cumulative_crashes": cumulative_crashes,
                         "cumulative_successes": cumulative_successes})
-            log_jsonl(output_path, {"turn": turn, "status": "duplicate",
+            log_jsonl(output_path, {"turn": turn, "status": "cached_" + c_status,
+                                    "val_bpb": c_vbpb,
                                     "diff": diff_text, "tool_calls": n_tool_calls,
                                     "prompt_len": len(instance_prompt),
                                     "trajectory_len": trajectory_len,
                                     "used_search": used_search,
                                     "agent_time": agent_time})
             continue
-        seen_diffs.add(diff_hash)
 
         # Dispatch to experiment GPU
         print(f"  Dispatching experiment to {EXPERIMENT_FLEET[0].name}...")
@@ -569,6 +576,12 @@ def main():
                 "status": status,
                 "crash_reason": crash_reason,
             })
+            # Cache OOM crashes (deterministic), but not transient crashes
+            if "OOM" in crash_reason or "out of memory" in crash_reason.lower():
+                seen_diffs[diff_hash] = {
+                    "status": "crash", "val_bpb": None,
+                    "crash_reason": crash_reason,
+                }
             cumulative_crashes += 1
             turns_table.add_data(
                 turn, status, None, 0.0, diff_text, crash_reason,
@@ -611,6 +624,14 @@ def main():
             "tokens_M": int(tokens_M) if tokens_M else None,
             "memory_gb": round(memory_gb, 1),
         })
+
+        # Cache successful result
+        seen_diffs[diff_hash] = {
+            "status": status, "val_bpb": val_bpb,
+            "depth": int(depth) if depth else None,
+            "tokens_M": int(tokens_M) if tokens_M else None,
+            "memory_gb": round(memory_gb, 1),
+        }
 
         cumulative_successes += 1
         turns_table.add_data(
