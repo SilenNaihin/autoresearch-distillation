@@ -31,7 +31,8 @@ Violating this triggers an assertion error.
 in the same time may outperform a larger model that trains fewer steps.
 
 ## Workflow
-1. Think step-by-step about what changes could lower val_bpb (architecture, hyperparameters, optimization, etc.).
+1. Read the full file — optimizer internals, model architecture, training loop — to find all the levers. \
+Think step-by-step about what changes could lower val_bpb
 2. Make targeted edits to train.py using sed. Do not rewrite the entire file. Example:
    <tool_call>
    {"name": "bash", "arguments": {"command": "sed -i 's/OLD_VALUE/NEW_VALUE/' train.py"}}
