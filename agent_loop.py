@@ -18,6 +18,7 @@ the model's bash commands, not environment output.
 """
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -89,6 +90,7 @@ class AutoresearchAgentLoop(ToolAgentLoop):
         self._best_lock = threading.Lock()
         self._behavioral_feedback = behavioral_feedback
         self._sed_failed: str | None = None  # tracked but no longer triggers early termination
+        self._seen_diffs: set[str] = set()
 
     async def run(self, sampling_params: dict[str, Any], **kwargs) -> AgentLoopOutput:
         """Override run() to add pre-creation and post-submission logic."""
@@ -251,9 +253,18 @@ class AutoresearchAgentLoop(ToolAgentLoop):
                 feedback = (f"FAILURE: your sed command failed: {self._sed_failed}\n\n"
                             "You must specify the target file and ensure the pattern matches exactly.")
             else:
-                feedback = ("FAILURE: train.py was unchanged from the original. No experiment was run.\n\n"
-                            "You MUST modify train.py to lower val_bpb.")
+                feedback = "This exact set of changes has been tried before. Try a different approach."
             return 0.0, f"{feedback}\n\n{notes_text}" if notes_text else feedback
+
+        # Novelty tracking: encourage diverse exploration via teacher feedback
+        diff_hash = hashlib.sha256(diff_text.encode()).hexdigest()
+        is_novel = diff_hash not in self._seen_diffs
+        self._seen_diffs.add(diff_hash)
+        if is_novel:
+            novelty_text = "Continue to try new creative attempts."
+        else:
+            novelty_text = "This exact set of changes has been tried before. Try a different approach."
+        notes_text = f"{notes_text}\n{novelty_text}" if notes_text else novelty_text
 
         # Dispatch to GPU fleet (blocking I/O → run in thread)
         pool = _get_pool()
@@ -275,8 +286,7 @@ class AutoresearchAgentLoop(ToolAgentLoop):
             crash_info = "\n".join(parts) if parts else "no output"
             logger.warning(f"Experiment crashed (exit {output.returncode}): {crash_info}")
             feedback = (f"Changes from previous attempt:\n{diff_text}\n\n"
-                        f"These changes caused the experiment to crash (exit {output.returncode}):\n{crash_info}\n\n"
-                        f"Do not repeat changes that didn't work.")
+                        f"These changes caused the experiment to crash (exit {output.returncode}):\n{crash_info}")
             return 0.0, f"{feedback}\n\n{notes_text}" if notes_text else feedback
         val_bpb = metrics.get("val_bpb")
 
@@ -285,7 +295,7 @@ class AutoresearchAgentLoop(ToolAgentLoop):
             logger.warning(f"No val_bpb in experiment output. Tail:\n{tail}")
             feedback = (f"Changes from previous attempt:\n{diff_text}\n\n"
                         f"We were not able to run your experiment. Output tail:\n{tail}")
-            return 0.0, f"{feedback}\n\n{notes_text}" if notes_text else feedback
+            return 0.0, feedback
 
         with self._best_lock:
             reward, status, reward_feedback = compute_reward(val_bpb, self._best_val_bpb)
