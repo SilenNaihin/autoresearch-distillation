@@ -78,7 +78,6 @@ actor_rollout_ref:
     max_num_batched_tokens: ${max_model_len}
     calculate_log_probs: True
     load_format: safetensors
-    layered_summon: True
     engine_kwargs:
       vllm:
         hf_overrides:
