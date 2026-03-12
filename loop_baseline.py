@@ -357,6 +357,8 @@ def main():
     turn_results: list[dict] = []
     seen_diffs: set[str] = set()
     best_trajectory_summary: str = ""
+    cumulative_crashes = 0
+    cumulative_successes = 0
 
     for turn in range(args.max_turns):
         t0 = time.time()
@@ -372,6 +374,7 @@ def main():
 
         # Run mini-swe-agent episode (model edits train.py via bash)
         workdir = create_isolated_workdir()
+        agent_t0 = time.time()
         try:
             modified, trajectory = run_agent_episode(
                 workdir=workdir,
@@ -385,6 +388,7 @@ def main():
             tb = traceback.format_exc()
             print(f"  Agent episode failed: {e}")
             print(f"  Traceback: {tb}")
+            cumulative_crashes += 1
             turn_results.append({
                 "turn": turn,
                 "val_bpb": None,
@@ -392,7 +396,10 @@ def main():
                 "status": "agent_error",
                 "crash_reason": str(e)[:200],
             })
-            wandb.log({"turn": turn, "status": "agent_error", "reward": 0.0})
+            wandb.log({"turn": turn, "status": "agent_error", "reward": 0.0,
+                        "prompt_len": len(instance_prompt),
+                        "cumulative_crashes": cumulative_crashes,
+                        "cumulative_successes": cumulative_successes})
             log_jsonl(output_path, {
                 "turn": turn, "status": "agent_error",
                 "error": str(e), "traceback": tb,
@@ -404,18 +411,25 @@ def main():
         finally:
             shutil.rmtree(workdir, ignore_errors=True)
 
+        agent_time = time.time() - agent_t0
+
         # Log full trace for debugging (always, regardless of experiment outcome)
         log_trace(Path(OUTPUT_DIR), args.run_name, turn, instance_prompt, trajectory)
 
         diff_text = make_diff(baseline, modified)
         n_tool_calls = sum(1 for m in trajectory if m.get("role") == "assistant"
                           and "tool_calls" in str(m.get("content", "")))
+        trajectory_len = len(trajectory)
+        used_search = "search.py" in str(trajectory)
+        diff_size = len(diff_text)
 
         print(f"  Tool calls: {n_tool_calls}")
-        print(f"  Diff size:  {len(diff_text)} chars")
+        print(f"  Diff size:  {diff_size} chars")
+        print(f"  Agent time: {agent_time:.1f}s  Trajectory: {trajectory_len} msgs  Search: {used_search}")
 
         if baseline == modified:
             print(f"  Status: no_changes")
+            cumulative_crashes += 1
             turn_results.append({
                 "turn": turn,
                 "val_bpb": None,
@@ -424,10 +438,17 @@ def main():
                 "crash_reason": "no changes made to train.py",
             })
             wandb.log({"turn": turn, "status": "no_changes", "reward": 0.0,
-                        "tool_calls": n_tool_calls})
+                        "tool_calls": n_tool_calls, "prompt_len": len(instance_prompt),
+                        "trajectory_len": trajectory_len, "used_search": used_search,
+                        "agent_time": agent_time, "diff_size": 0,
+                        "cumulative_crashes": cumulative_crashes,
+                        "cumulative_successes": cumulative_successes})
             log_jsonl(output_path, {"turn": turn, "status": "no_changes",
                                     "tool_calls": n_tool_calls,
-                                    "prompt_len": len(instance_prompt)})
+                                    "prompt_len": len(instance_prompt),
+                                    "trajectory_len": trajectory_len,
+                                    "used_search": used_search,
+                                    "agent_time": agent_time})
             continue
 
         # Dedup: skip if we've seen this exact diff before
@@ -442,10 +463,18 @@ def main():
                 "crash_reason": "exact same changes already tried — try something different",
             })
             wandb.log({"turn": turn, "status": "duplicate", "reward": 0.0,
-                        "tool_calls": n_tool_calls})
+                        "tool_calls": n_tool_calls, "prompt_len": len(instance_prompt),
+                        "trajectory_len": trajectory_len, "used_search": used_search,
+                        "agent_time": agent_time, "diff_size": diff_size,
+                        "is_duplicate": True, "is_novel": False,
+                        "cumulative_crashes": cumulative_crashes,
+                        "cumulative_successes": cumulative_successes})
             log_jsonl(output_path, {"turn": turn, "status": "duplicate",
                                     "diff": diff_text, "tool_calls": n_tool_calls,
-                                    "prompt_len": len(instance_prompt)})
+                                    "prompt_len": len(instance_prompt),
+                                    "trajectory_len": trajectory_len,
+                                    "used_search": used_search,
+                                    "agent_time": agent_time})
             continue
         seen_diffs.add(diff_hash)
 
@@ -466,12 +495,22 @@ def main():
                 "status": status,
                 "crash_reason": crash_reason,
             })
+            cumulative_crashes += 1
             wandb.log({"turn": turn, "status": status, "reward": 0.0,
-                        "experiment_time": experiment_time, "tool_calls": n_tool_calls})
+                        "experiment_time": experiment_time, "tool_calls": n_tool_calls,
+                        "prompt_len": len(instance_prompt),
+                        "trajectory_len": trajectory_len, "used_search": used_search,
+                        "agent_time": agent_time, "diff_size": diff_size,
+                        "is_duplicate": False, "is_novel": True,
+                        "cumulative_crashes": cumulative_crashes,
+                        "cumulative_successes": cumulative_successes})
             log_jsonl(output_path, {"turn": turn, "status": status,
                                     "diff": diff_text, "feedback": error_feedback,
                                     "experiment_time": experiment_time,
-                                    "prompt_len": len(instance_prompt)})
+                                    "prompt_len": len(instance_prompt),
+                                    "trajectory_len": trajectory_len,
+                                    "used_search": used_search,
+                                    "agent_time": agent_time})
             continue
 
         # Compute reward
@@ -494,6 +533,7 @@ def main():
             "memory_gb": round(memory_gb, 1),
         })
 
+        cumulative_successes += 1
         print(f"  val_bpb={val_bpb:.6f}  best={best_val_bpb:.6f}  "
               f"reward={reward:.4f}  status={status}  time={experiment_time:.0f}s")
 
@@ -501,7 +541,12 @@ def main():
             "turn": turn, "val_bpb": val_bpb, "best_val_bpb": best_val_bpb,
             "reward": reward, "memory_gb": memory_gb,
             "experiment_time": experiment_time, "status": status,
-            "tool_calls": n_tool_calls,
+            "tool_calls": n_tool_calls, "prompt_len": len(instance_prompt),
+            "trajectory_len": trajectory_len, "used_search": used_search,
+            "agent_time": agent_time, "diff_size": diff_size,
+            "is_duplicate": False, "is_novel": True,
+            "cumulative_crashes": cumulative_crashes,
+            "cumulative_successes": cumulative_successes,
             **{f"env/{k}": v for k, v in metrics.items()},
         })
         log_jsonl(output_path, {
@@ -510,6 +555,8 @@ def main():
             "experiment_time": experiment_time, "diff": diff_text,
             "metrics": metrics, "tool_calls": n_tool_calls,
             "prompt_len": len(instance_prompt),
+            "trajectory_len": trajectory_len, "used_search": used_search,
+            "agent_time": agent_time,
         })
 
     # Summary
