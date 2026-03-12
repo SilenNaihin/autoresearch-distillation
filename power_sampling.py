@@ -8,6 +8,15 @@ Uses vLLM's OpenAI-compatible chat completions API with logprobs.
 With temperature=1 proposal, the Metropolis-Hastings acceptance ratio simplifies to:
     log_ratio = (α - 1) * [Σ log_p(new_suffix) - Σ log_p(old_suffix)]
 
+Algorithm (matching reference implementation):
+    1. Generate complete initial sequence from base model (full max_tokens budget)
+    2. For each of block_num blocks:
+       a. Pick a random resample position in the generated sequence
+       b. For each of mcmc_steps MH steps:
+          - Resample everything from that position onward
+          - Accept/reject via Metropolis-Hastings ratio
+    Total MCMC API calls = block_num × mcmc_steps
+
 Requirements:
     - vLLM server with continue_final_message support (v0.4+)
     - openai Python client
@@ -133,7 +142,7 @@ def power_sample(
     system_prompt: str,
     user_prompt: str,
     alpha: float = 4.0,
-    max_tokens: int = 2048,
+    max_tokens: int = 32768,
     block_num: int = 16,
     mcmc_steps: int = 10,
     temperature: float = 1.0,
@@ -141,8 +150,10 @@ def power_sample(
 ) -> PowerSampleResult:
     """Block-wise MCMC power sampling from p^α (Algorithm 1).
 
-    Generates a completion by progressively sampling blocks of tokens,
-    refining each block with Metropolis-Hastings steps.
+    1. Generate a complete initial sequence with the full max_tokens budget.
+    2. Refine via block_num rounds of MCMC, each with mcmc_steps MH proposals.
+       Each block picks a random resample position; all mcmc_steps within that
+       block resample from that position onward.
 
     With temperature=1 proposal, the MH acceptance ratio simplifies to:
         log_ratio = (α - 1) * [Σ log_p(new) - Σ log_p(old)]
@@ -153,9 +164,9 @@ def power_sample(
         system_prompt: System message.
         user_prompt: User message (train.py + feedback).
         alpha: Power exponent (higher = sharper). Paper uses 4.0.
-        max_tokens: Max tokens to generate total.
-        block_num: Number of sequential blocks. Paper uses 16.
-        mcmc_steps: MCMC steps per block. Paper uses 10.
+        max_tokens: Max tokens per generation (full context budget).
+        block_num: Number of MCMC refinement rounds. Paper uses 16.
+        mcmc_steps: MH steps per round. Paper uses 10.
         temperature: Proposal temperature. 1.0 gives exact MH ratio.
         stop: Stop sequences.
     """
@@ -170,53 +181,33 @@ def power_sample(
         )
 
     t0 = time.time()
-    block_size = max(1, max_tokens // block_num)
-
-    suffix_tokens: list[str] = []
-    suffix_logprobs: list[float] = []
 
     total_generated = 0
     total_accepted = 0
     total_proposed = 0
-    done = False
 
+    # --- Step 1: Generate complete initial sequence ---
+    msgs = _build_messages(system_prompt, user_prompt)
+    suffix_tokens, suffix_logprobs = _chat_generate(
+        client, model, msgs, max_tokens, temperature, stop,
+    )
+    total_generated += len(suffix_tokens)
+
+    if not suffix_tokens:
+        return PowerSampleResult(text="", wall_time=time.time() - t0)
+
+    seq_len = len(suffix_tokens)
+
+    # --- Step 2: Block-wise MCMC refinement ---
     for block_idx in range(block_num):
-        if done:
+        if seq_len <= 1:
             break
 
-        # --- Generate initial tokens for this block ---
-        prefix = "".join(suffix_tokens)
-        if prefix:
-            msgs = _build_messages(system_prompt, user_prompt, prefix)
-            cont = True
-        else:
-            msgs = _build_messages(system_prompt, user_prompt)
-            cont = False
-
-        tokens, logprobs = _chat_generate(
-            client, model, msgs, block_size, temperature, stop,
-            continue_final=cont,
-        )
-        total_generated += len(tokens)
-
-        if not tokens:
-            break
-        if len(tokens) < block_size:
-            done = True
-
-        suffix_tokens.extend(tokens)
-        suffix_logprobs.extend(logprobs)
-
-        # --- MCMC refinement within current sequence ---
-        seq_len = len(suffix_tokens)
+        # Pick a random resample position for this block
+        idx = random.randint(0, seq_len - 1)
+        remaining = seq_len - idx
 
         for step in range(mcmc_steps):
-            if seq_len <= 1:
-                break
-
-            idx = random.randint(0, seq_len - 1)
-            remaining = seq_len - idx
-
             # Build prefix for proposal
             prop_prefix = "".join(suffix_tokens[:idx])
             if prop_prefix:
@@ -255,6 +246,7 @@ def power_sample(
                 suffix_tokens = suffix_tokens[:idx] + list(prop_tokens[:cmp_len])
                 suffix_logprobs = suffix_logprobs[:idx] + list(new_lps)
                 seq_len = len(suffix_tokens)
+                remaining = seq_len - idx
                 total_accepted += 1
 
     acceptance_rate = total_accepted / max(total_proposed, 1)
