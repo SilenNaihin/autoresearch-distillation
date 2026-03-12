@@ -20,7 +20,6 @@ Compare wandb curves: autoresearch-baseline vs autoresearch-sdpo
 """
 
 import argparse
-import hashlib
 import json
 import os
 import re
@@ -33,6 +32,7 @@ import wandb
 
 from bash_tool import create_isolated_workdir, run_agent_episode
 from environment import BASELINE_VAL_BPB, compute_reward, parse_metrics
+from experiment_cache import BASELINE_CACHE, ExperimentCache
 from runners import GPUSlot, SSHRunner
 
 # Baseline-specific system prompt (separate from SDPO's prompts.py).
@@ -416,7 +416,8 @@ def main():
     # Multi-turn loop
     best_val_bpb = float("inf")
     turn_results: list[dict] = []
-    seen_diffs: dict[str, dict] = {}  # diff_hash -> cached result dict
+    cache = ExperimentCache(write_path=BASELINE_CACHE)
+    print(f"Experiment cache: {len(cache)} entries loaded from disk")
     best_trajectory_summary: str = ""
     cumulative_crashes = 0
     cumulative_successes = 0
@@ -521,8 +522,7 @@ def main():
             continue
 
         # Cache: replay cached result if we've seen this exact diff before
-        diff_hash = hashlib.sha256(diff_text.encode()).hexdigest()
-        cached = seen_diffs.get(diff_hash)
+        cached = cache.get(diff_text)
         if cached is not None:
             c_status = cached.get("status", "duplicate")
             c_vbpb = cached.get("val_bpb")
@@ -578,10 +578,10 @@ def main():
             })
             # Cache OOM crashes (deterministic), but not transient crashes
             if "OOM" in crash_reason or "out of memory" in crash_reason.lower():
-                seen_diffs[diff_hash] = {
+                cache.put(diff_text, {
                     "status": "crash", "val_bpb": None,
                     "crash_reason": crash_reason,
-                }
+                })
             cumulative_crashes += 1
             turns_table.add_data(
                 turn, status, None, 0.0, diff_text, crash_reason,
@@ -626,12 +626,12 @@ def main():
         })
 
         # Cache successful result
-        seen_diffs[diff_hash] = {
+        cache.put(diff_text, {
             "status": status, "val_bpb": val_bpb,
             "depth": int(depth) if depth else None,
             "tokens_M": int(tokens_M) if tokens_M else None,
             "memory_gb": round(memory_gb, 1),
-        }
+        })
 
         cumulative_successes += 1
         turns_table.add_data(

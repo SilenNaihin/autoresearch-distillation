@@ -18,7 +18,6 @@ the model's bash commands, not environment output.
 """
 
 import asyncio
-import hashlib
 import json
 import logging
 import os
@@ -27,6 +26,8 @@ import threading
 from difflib import unified_diff
 from pathlib import Path
 from typing import Any
+
+from experiment_cache import SDPO_CACHE, ExperimentCache
 
 # Ensure SDPO's verl is importable
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "SDPO"))
@@ -91,7 +92,7 @@ class AutoresearchAgentLoop(ToolAgentLoop):
         self._best_lock = threading.Lock()
         self._behavioral_feedback = behavioral_feedback
         self._sed_failed: str | None = None  # tracked but no longer triggers early termination
-        self._seen_diffs: dict[str, tuple[float, str]] = {}  # diff_hash -> (reward, feedback) for successful runs
+        self._cache = ExperimentCache(write_path=SDPO_CACHE)  # persistent, shared with baseline
 
     async def run(self, sampling_params: dict[str, Any], **kwargs) -> AgentLoopOutput:
         """Override run() to add pre-creation and post-submission logic."""
@@ -258,10 +259,9 @@ class AutoresearchAgentLoop(ToolAgentLoop):
             return 0.0, f"{feedback}\n\n{notes_text}" if notes_text else feedback
 
         # Check experiment cache — successful runs and CUDA OOMs are cached
-        diff_hash = hashlib.sha256(diff_text.encode()).hexdigest()
-        cached = self._seen_diffs.get(diff_hash)
+        cached = self._cache.get(diff_text)
         if cached is not None:
-            reward, feedback = cached
+            reward, feedback = cached["reward"], cached["feedback"]
             novelty_text = "This exact set of changes has been tried before. Try a different approach."
             notes_text = f"{notes_text}\n{novelty_text}" if notes_text else novelty_text
             return reward, f"{feedback}\n\n{notes_text}" if notes_text else feedback
@@ -292,7 +292,7 @@ class AutoresearchAgentLoop(ToolAgentLoop):
                         f"These changes caused the experiment to crash (exit {output.returncode}):\n{crash_info}")
             # Cache CUDA OOMs (deterministic), but not transient crashes (SSH, segfault)
             if "CUDA out of memory" in crash_info:
-                self._seen_diffs[diff_hash] = (-1.0, feedback)
+                self._cache.put(diff_text, {"reward": -1.0, "feedback": feedback})
             return -1.0, f"{feedback}\n\n{notes_text}" if notes_text else feedback
         val_bpb = metrics.get("val_bpb")
 
@@ -319,6 +319,6 @@ class AutoresearchAgentLoop(ToolAgentLoop):
         feedback = f"{best_text}Changes from previous attempt:\n{diff_text}\n\n{reward_feedback}\n{metrics_line}"
 
         # Cache successful result
-        self._seen_diffs[diff_hash] = (reward, feedback)
+        self._cache.put(diff_text, {"reward": reward, "feedback": feedback})
 
         return reward, f"{feedback}\n\n{notes_text}" if notes_text else feedback
