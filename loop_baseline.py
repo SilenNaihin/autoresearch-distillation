@@ -20,8 +20,10 @@ Compare wandb curves: autoresearch-baseline vs autoresearch-sdpo
 """
 
 import argparse
+import hashlib
 import json
 import os
+import re
 import shutil
 import time
 from difflib import unified_diff
@@ -57,13 +59,8 @@ def make_diff(baseline: str, modified: str) -> str:
     ))
 
 
-def format_feedback_prompt(turn_results: list[dict]) -> str:
-    """Format accumulated results into a structured feedback block.
-
-    Shows top-K results with full diffs prominently, then one-line summaries
-    for the rest. This ensures the model can see exactly what worked without
-    burning context on failed attempts.
-    """
+def format_feedback_prompt(turn_results: list[dict], best_trajectory_summary: str = "") -> str:
+    """Format accumulated results into a structured feedback block."""
     if not turn_results:
         return ""
 
@@ -89,6 +86,20 @@ def format_feedback_prompt(turn_results: list[dict]) -> str:
                 f"Make changes to train.py to push this as low as you can.**"
             )
 
+    # Stuck detection: if last 5 successful results are within 0.005 of each other
+    recent_vals = [r["val_bpb"] for r in turn_results[-5:] if r.get("val_bpb") is not None]
+    if len(recent_vals) >= 4 and (max(recent_vals) - min(recent_vals)) < 0.005:
+        parts.append(
+            "**Your last several results are all very similar. "
+            "Try something completely different — a new approach you haven't explored yet.**"
+        )
+
+    # Best run reasoning (if available)
+    if best_trajectory_summary:
+        parts.append(
+            f"## Reasoning from your best run\n{best_trajectory_summary}"
+        )
+
     # Top-K best results with full diffs
     top_k = successful[:TOP_K_FULL_DIFFS]
     if top_k:
@@ -111,9 +122,14 @@ def format_feedback_prompt(turn_results: list[dict]) -> str:
                 f"(depth={r.get('depth', '?')}, tokens={r.get('tokens_M', '?')}M)"
             )
 
-    # Failed attempts — include diff so the model knows what to avoid
+    # Failed attempts — reframed as debugging opportunities
     if failed:
-        parts.append("## Failed attempts (avoid repeating these)")
+        parts.append(
+            "## Failed attempts\n"
+            "These crashed. Don't repeat the exact same change, but consider "
+            "if the core idea could work with adjustments (e.g., reduce batch size "
+            "to fit a larger model in VRAM)."
+        )
         for r in failed:
             status = r.get("status", "crash")
             reason = r.get("crash_reason", "unknown")
@@ -127,7 +143,7 @@ def format_feedback_prompt(turn_results: list[dict]) -> str:
                 parts.append(f"- Attempt {r['turn']+1}: {status} — {reason}")
 
     parts.append(
-        "\nLearn from these results. Don't repeat things that didn't work. "
+        "\nLearn from these results. "
         "Build on the best approaches above to further lower val_bpb."
     )
 
@@ -135,11 +151,15 @@ def format_feedback_prompt(turn_results: list[dict]) -> str:
 
 
 def classify_crash(error_text: str) -> str:
-    """Extract a short crash reason from error output."""
+    """Extract a short crash reason from error output, including VRAM usage for OOM."""
     if not error_text:
         return "unknown error"
     lower = error_text.lower()
     if "out of memory" in lower or "oom" in lower:
+        # Extract VRAM usage from PyTorch OOM message
+        m = re.search(r"(\d+\.\d+)\s*GiB\s*memory\s*in\s*use", error_text)
+        if m:
+            return f"OOM — used {m.group(1)} GiB of 93 GiB available"
         return "OOM (out of VRAM)"
     if "syntaxerror" in lower:
         return "SyntaxError in generated code"
@@ -153,6 +173,20 @@ def classify_crash(error_text: str) -> str:
     if lines:
         return lines[-1][:120]
     return "unknown error"
+
+
+def extract_trajectory_summary(trajectory: list[dict], max_len: int = 500) -> str:
+    """Extract the model's reasoning from the first assistant message in a trajectory."""
+    for msg in trajectory:
+        if msg.get("role") == "assistant":
+            content = msg.get("content", "")
+            if isinstance(content, str) and content.strip():
+                # Take the thinking/reasoning part before any tool calls
+                text = content.strip()
+                if len(text) > max_len:
+                    text = text[:max_len] + "..."
+                return text
+    return ""
 
 
 def dispatch_experiment(train_py: str) -> tuple[dict, int, str]:
@@ -256,6 +290,8 @@ def main():
     # Multi-turn loop
     best_val_bpb = float("inf")
     turn_results: list[dict] = []
+    seen_diffs: set[str] = set()
+    best_trajectory_summary: str = ""
 
     for turn in range(args.max_turns):
         t0 = time.time()
@@ -265,7 +301,7 @@ def main():
 
         # Build instance prompt with structured feedback
         instance_prompt = build_instance_prompt(baseline, [])
-        feedback_block = format_feedback_prompt(turn_results)
+        feedback_block = format_feedback_prompt(turn_results, best_trajectory_summary)
         if feedback_block:
             instance_prompt += "\n\n" + feedback_block
 
@@ -329,6 +365,25 @@ def main():
                                     "prompt_len": len(instance_prompt)})
             continue
 
+        # Dedup: skip if we've seen this exact diff before
+        diff_hash = hashlib.sha256(diff_text.encode()).hexdigest()
+        if diff_hash in seen_diffs:
+            print(f"  Status: duplicate (skipping experiment)")
+            turn_results.append({
+                "turn": turn,
+                "val_bpb": None,
+                "diff": diff_text,
+                "status": "duplicate",
+                "crash_reason": "exact same changes already tried — try something different",
+            })
+            wandb.log({"turn": turn, "status": "duplicate", "reward": 0.0,
+                        "tool_calls": n_tool_calls})
+            log_jsonl(output_path, {"turn": turn, "status": "duplicate",
+                                    "diff": diff_text, "tool_calls": n_tool_calls,
+                                    "prompt_len": len(instance_prompt)})
+            continue
+        seen_diffs.add(diff_hash)
+
         # Dispatch to experiment GPU
         print(f"  Dispatching experiment to {EXPERIMENT_FLEET[0].name}...")
         metrics, returncode, error_feedback = dispatch_experiment(modified)
@@ -358,6 +413,7 @@ def main():
         reward, status, reward_feedback = compute_reward(val_bpb, best_val_bpb)
         if status == "improvement":
             best_val_bpb = val_bpb
+            best_trajectory_summary = extract_trajectory_summary(trajectory)
 
         memory_gb = metrics.get("peak_vram_mb", 0) / 1024
         depth = metrics.get("depth")
