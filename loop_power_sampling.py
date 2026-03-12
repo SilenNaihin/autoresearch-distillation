@@ -214,8 +214,8 @@ def main():
                         help="MCMC refinement steps per block")
     parser.add_argument("--temperature", type=float, default=1.0,
                         help="Proposal temperature (1.0 for exact MH ratio)")
-    parser.add_argument("--max-tokens", type=int, default=4096,
-                        help="Max tokens per generation (Qwen3 needs ~3K for thinking + sed)")
+    parser.add_argument("--max-tokens", type=int, default=32768,
+                        help="Max response tokens (match 64k context window, model EOS's naturally)")
     # Best-of-N params
     parser.add_argument("--n", type=int, default=8,
                         help="Number of candidates for best-of-n")

@@ -106,7 +106,7 @@ python loop_power_sampling.py \
     --alpha 4.0 \
     --mcmc-steps 10 \
     --block-num 16 \
-    --max-tokens 4096 \
+    --max-tokens 32768 \
     --max-turns 30 \
     --run-name qwen3-14b-power-a4
 
@@ -114,7 +114,7 @@ python loop_power_sampling.py \
 python loop_power_sampling.py \
     --method best-of-n \
     --n 8 \
-    --max-tokens 4096 \
+    --max-tokens 32768 \
     --max-turns 30 \
     --run-name qwen3-14b-best-of-8
 ```
@@ -127,7 +127,7 @@ python loop_power_sampling.py \
 | `block_num` | 16 | 16 | Number of sequential MCMC blocks |
 | `mcmc_steps` | 10 | 10 | Steps per block. 2 already gives most of the gain |
 | `temperature` | 1.0 | 0.25 | Paper uses 1/α but that needs temperature-scaled logprobs. We use 1.0 for exact MH ratio with the vLLM API |
-| `max_tokens` | 4096 | 3072 | Qwen3 uses ~3K tokens for `<think>` blocks before outputting sed commands |
+| `max_tokens` | 32768 | 3072 | Matches 64k context window (same as baseline). Model EOS's naturally at ~3500 tokens; MCMC cost scales with actual output, not ceiling |
 | `n` (best-of-n) | 8 | — | Paper doesn't test this but it's a simpler baseline |
 
 ## Qwen3 thinking behavior
