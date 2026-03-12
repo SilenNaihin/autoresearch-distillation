@@ -42,16 +42,9 @@ Violating this triggers an assertion error.
 
 
 def build_instance_prompt(train_py_content: str, history_lines: list[str]) -> str:
-    """Build the task prompt with current train.py and experiment history."""
+    """Build the task prompt with current train.py."""
     parts = ["## Current train.py\n```python\n" + train_py_content + "\n```"]
 
-    if history_lines:
-        parts.append("## Experiment history (recent)\n```\n" + "\n".join(history_lines) + "\n```")
-        parts.append(
-            "Each row shows: iteration, val_bpb, memory_gb, status, description.\n"
-            "Learn from past experiments. Don't repeat things that didn't work. "
-            "Build on ideas that improved val_bpb."
-        )
     parts.append(
         "You may make a single focused change or combine related changes if they work together. "
         "Feel free to try completely new approaches and explore new spaces every once in a while. "

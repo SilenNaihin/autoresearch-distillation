@@ -91,7 +91,7 @@ class AutoresearchAgentLoop(ToolAgentLoop):
         self._best_lock = threading.Lock()
         self._behavioral_feedback = behavioral_feedback
         self._sed_failed: str | None = None  # tracked but no longer triggers early termination
-        self._seen_diffs: set[str] = set()
+        self._seen_diffs: dict[str, tuple[float, str]] = {}  # diff_hash -> (reward, feedback) for successful runs
 
     async def run(self, sampling_params: dict[str, Any], **kwargs) -> AgentLoopOutput:
         """Override run() to add pre-creation and post-submission logic."""
@@ -257,14 +257,16 @@ class AutoresearchAgentLoop(ToolAgentLoop):
                 feedback = "This exact set of changes has been tried before. Try a different approach."
             return 0.0, f"{feedback}\n\n{notes_text}" if notes_text else feedback
 
-        # Novelty tracking: encourage diverse exploration via teacher feedback
+        # Check experiment cache — only successful runs are cached
         diff_hash = hashlib.sha256(diff_text.encode()).hexdigest()
-        is_novel = diff_hash not in self._seen_diffs
-        self._seen_diffs.add(diff_hash)
-        if is_novel:
-            novelty_text = "Continue to try new creative attempts."
-        else:
+        cached = self._seen_diffs.get(diff_hash)
+        if cached is not None:
+            reward, feedback = cached
             novelty_text = "This exact set of changes has been tried before. Try a different approach."
+            notes_text = f"{notes_text}\n{novelty_text}" if notes_text else novelty_text
+            return reward, f"{feedback}\n\n{notes_text}" if notes_text else feedback
+
+        novelty_text = "Continue to try new creative attempts."
         notes_text = f"{notes_text}\n{novelty_text}" if notes_text else novelty_text
 
         # Dispatch to GPU fleet (blocking I/O → run in thread)
@@ -288,6 +290,7 @@ class AutoresearchAgentLoop(ToolAgentLoop):
             logger.warning(f"Experiment crashed (exit {output.returncode}): {crash_info}")
             feedback = (f"Changes from previous attempt:\n{diff_text}\n\n"
                         f"These changes caused the experiment to crash (exit {output.returncode}):\n{crash_info}")
+            # Don't cache crashes — may be transient
             return 0.0, f"{feedback}\n\n{notes_text}" if notes_text else feedback
         val_bpb = metrics.get("val_bpb")
 
@@ -296,6 +299,7 @@ class AutoresearchAgentLoop(ToolAgentLoop):
             logger.warning(f"No val_bpb in experiment output. Tail:\n{tail}")
             feedback = (f"Changes from previous attempt:\n{diff_text}\n\n"
                         f"We were not able to run your experiment. Output tail:\n{tail}")
+            # Don't cache missing metrics — may be transient
             return 0.0, feedback
 
         with self._best_lock:
@@ -311,4 +315,8 @@ class AutoresearchAgentLoop(ToolAgentLoop):
             reward_feedback += f" These changes made validation loss significantly worse (degraded by {degradation:.6f})."
         best_text = f"Changes that produced the best result so far:\n{self._best_diff}\n\n" if self._best_diff else ""
         feedback = f"{best_text}Changes from previous attempt:\n{diff_text}\n\n{reward_feedback}\n{metrics_line}"
+
+        # Cache successful result
+        self._seen_diffs[diff_hash] = (reward, feedback)
+
         return reward, f"{feedback}\n\n{notes_text}" if notes_text else feedback
