@@ -266,36 +266,45 @@ class AutoresearchAgentLoop(ToolAgentLoop):
             novelty_text = "This exact set of changes has been tried before. Try a different approach."
         notes_text = f"{notes_text}\n{novelty_text}" if notes_text else novelty_text
 
-        # Dispatch to GPU fleet (blocking I/O → run in thread)
-        pool = _get_pool()
-        output = await asyncio.to_thread(pool.run, modified)
-
-        # Parse whatever metrics are available (even on crash, stdout may have partial output)
-        metrics = parse_metrics(output.stdout) if output.stdout else {}
+        # --- DUMMY MODE: skip real GPU dispatch, return fake metrics ---
+        import random
+        val_bpb = BASELINE_VAL_BPB + random.uniform(-0.02, 0.05)
+        metrics = {"val_bpb": val_bpb, "num_steps": 500, "num_params_M": 50.3,
+                   "peak_vram_mb": 45000, "mfu_percent": 27.0, "training_seconds": 300,
+                   "total_seconds": 320, "total_tokens_M": 300, "depth": 8}
         self._last_env_metrics = metrics
+        # --- END DUMMY MODE (uncomment below for real experiments) ---
 
-        if output.returncode != 0:
-            # Combine stderr and stdout tail for maximum crash context.
-            # Remote cmd uses 2>&1, so experiment errors are in stdout;
-            # stderr is SSH-level errors only.
-            parts = []
-            if output.stderr and output.stderr.strip():
-                parts.append(output.stderr.strip()[:1000])
-            if output.stdout and output.stdout.strip():
-                parts.append(output.stdout.strip()[-1000:])
-            crash_info = "\n".join(parts) if parts else "no output"
-            logger.warning(f"Experiment crashed (exit {output.returncode}): {crash_info}")
-            feedback = (f"Changes from previous attempt:\n{diff_text}\n\n"
-                        f"These changes caused the experiment to crash (exit {output.returncode}):\n{crash_info}")
-            return 0.0, f"{feedback}\n\n{notes_text}" if notes_text else feedback
-        val_bpb = metrics.get("val_bpb")
-
-        if val_bpb is None:
-            tail = "\n".join(output.stdout.strip().splitlines()[-20:]) if output.stdout else "empty output"
-            logger.warning(f"No val_bpb in experiment output. Tail:\n{tail}")
-            feedback = (f"Changes from previous attempt:\n{diff_text}\n\n"
-                        f"We were not able to run your experiment. Output tail:\n{tail}")
-            return 0.0, feedback
+        # # Dispatch to GPU fleet (blocking I/O → run in thread)
+        # pool = _get_pool()
+        # output = await asyncio.to_thread(pool.run, modified)
+        #
+        # # Parse whatever metrics are available (even on crash, stdout may have partial output)
+        # metrics = parse_metrics(output.stdout) if output.stdout else {}
+        # self._last_env_metrics = metrics
+        #
+        # if output.returncode != 0:
+        #     # Combine stderr and stdout tail for maximum crash context.
+        #     # Remote cmd uses 2>&1, so experiment errors are in stdout;
+        #     # stderr is SSH-level errors only.
+        #     parts = []
+        #     if output.stderr and output.stderr.strip():
+        #         parts.append(output.stderr.strip()[:1000])
+        #     if output.stdout and output.stdout.strip():
+        #         parts.append(output.stdout.strip()[-1000:])
+        #     crash_info = "\n".join(parts) if parts else "no output"
+        #     logger.warning(f"Experiment crashed (exit {output.returncode}): {crash_info}")
+        #     feedback = (f"Changes from previous attempt:\n{diff_text}\n\n"
+        #                 f"These changes caused the experiment to crash (exit {output.returncode}):\n{crash_info}")
+        #     return 0.0, f"{feedback}\n\n{notes_text}" if notes_text else feedback
+        # val_bpb = metrics.get("val_bpb")
+        #
+        # if val_bpb is None:
+        #     tail = "\n".join(output.stdout.strip().splitlines()[-20:]) if output.stdout else "empty output"
+        #     logger.warning(f"No val_bpb in experiment output. Tail:\n{tail}")
+        #     feedback = (f"Changes from previous attempt:\n{diff_text}\n\n"
+        #                 f"We were not able to run your experiment. Output tail:\n{tail}")
+        #     return 0.0, feedback
 
         with self._best_lock:
             reward, status, reward_feedback = compute_reward(val_bpb, self._best_val_bpb)
