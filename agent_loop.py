@@ -257,7 +257,7 @@ class AutoresearchAgentLoop(ToolAgentLoop):
                 feedback = "This exact set of changes has been tried before. Try a different approach."
             return 0.0, f"{feedback}\n\n{notes_text}" if notes_text else feedback
 
-        # Check experiment cache — only successful runs are cached
+        # Check experiment cache — successful runs and CUDA OOMs are cached
         diff_hash = hashlib.sha256(diff_text.encode()).hexdigest()
         cached = self._seen_diffs.get(diff_hash)
         if cached is not None:
@@ -290,8 +290,10 @@ class AutoresearchAgentLoop(ToolAgentLoop):
             logger.warning(f"Experiment crashed (exit {output.returncode}): {crash_info}")
             feedback = (f"Changes from previous attempt:\n{diff_text}\n\n"
                         f"These changes caused the experiment to crash (exit {output.returncode}):\n{crash_info}")
-            # Don't cache crashes — may be transient
-            return 0.0, f"{feedback}\n\n{notes_text}" if notes_text else feedback
+            # Cache CUDA OOMs (deterministic), but not transient crashes (SSH, segfault)
+            if "CUDA out of memory" in crash_info:
+                self._seen_diffs[diff_hash] = (-1.0, feedback)
+            return -1.0, f"{feedback}\n\n{notes_text}" if notes_text else feedback
         val_bpb = metrics.get("val_bpb")
 
         if val_bpb is None:
