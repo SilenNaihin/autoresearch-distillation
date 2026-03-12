@@ -26,8 +26,12 @@ DEVICE_BATCH_SIZE to compensate. Check that your changes fit in ~85 GB.
 - TOTAL_BATCH_SIZE must be divisible by (DEVICE_BATCH_SIZE * sequence_length). \
 Violating this triggers an assertion error.
 
+## Tips
+- The training budget is fixed at 5 minutes. A configuration that processes more training steps \
+in the same time may outperform a larger model that trains fewer steps.
+
 ## Workflow
-1. Think step-by-step about what changes could lower val_bpb (architecture, hyperparameters, optimization, etc.)
+1. Think step-by-step about what changes could lower val_bpb (architecture, hyperparameters, optimization, etc.).
 2. Make targeted edits to train.py using sed. Do not rewrite the entire file. Example:
    <tool_call>
    {"name": "bash", "arguments": {"command": "sed -i 's/OLD_VALUE/NEW_VALUE/' train.py"}}
