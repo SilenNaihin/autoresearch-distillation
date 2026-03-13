@@ -88,7 +88,7 @@ class AutoresearchAgentLoop(ToolAgentLoop):
     def __init__(self, *args, inject_best_diff: bool = False, **kwargs):
         super().__init__(*args, **kwargs)
         self._inject_best_diff = inject_best_diff
-        print(f"[AGENT_LOOP_INIT] inject_best_diff={inject_best_diff}", flush=True)
+
         self._sed_failed: str | None = None  # tracked but no longer triggers early termination
         self._cache = ExperimentCache(write_path=SDPO_CACHE)  # persistent, shared with baseline
 
