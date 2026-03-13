@@ -98,15 +98,8 @@ TOP_K_FULL_DIFFS = 3
 
 
 def build_instance_prompt(train_py_content: str, history_lines: list[str]) -> str:
-    """Build the task prompt — does NOT include full train.py to force model to cat it."""
-    parts = [
-        "## train.py\n"
-        "train.py is a single-file GPT pretraining script (~500 lines). "
-        "It uses a Muon+Adam optimizer, FlashAttention 3, sliding window attention, "
-        "and trains on FineWeb-Edu data.\n\n"
-        "Start by reading the file with `cat train.py` to understand the full codebase "
-        "before making changes."
-    ]
+    """Build the task prompt with current train.py."""
+    parts = ["## Current train.py\n```python\n" + train_py_content + "\n```"]
 
     parts.append(
         "You may make a single focused change or combine related changes if they work together. "
