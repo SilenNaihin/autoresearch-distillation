@@ -8,10 +8,11 @@ Uses vLLM's OpenAI-compatible chat completions API with logprobs.
 With temperature=1 proposal, the Metropolis-Hastings acceptance ratio simplifies to:
     log_ratio = (α - 1) * [Σ log_p(new_suffix) - Σ log_p(old_suffix)]
 
-Algorithm (matching reference implementation):
-    1. Generate complete initial sequence from base model (full max_tokens budget)
-    2. For each of block_num blocks:
-       a. Pick a random resample position in the generated sequence
+Algorithm:
+    1. Generate complete initial sequence (with thinking if available)
+    2. Find the </think> boundary — MCMC only resamples tokens AFTER it
+    3. For each of block_num blocks:
+       a. Pick a random resample position in the post-think region
        b. For each of mcmc_steps MH steps:
           - Resample everything from that position onward
           - Accept/reject via Metropolis-Hastings ratio
@@ -40,6 +41,7 @@ class PowerSampleResult:
     acceptance_rate: float = 0.0
     total_tokens_generated: int = 0
     wall_time: float = 0.0
+    think_end_idx: int = 0
 
 
 def _chat_generate(
@@ -50,7 +52,6 @@ def _chat_generate(
     temperature: float = 1.0,
     stop: list[str] | None = None,
     continue_final: bool = False,
-    disable_thinking: bool = True,
 ) -> tuple[list[str], list[float]]:
     """Generate via chat completions with logprobs.
 
@@ -67,10 +68,7 @@ def _chat_generate(
     if stop:
         kwargs["stop"] = stop
 
-    # Build extra_body: disable thinking + optional continue_final_message
     extra_body: dict = {}
-    if disable_thinking:
-        extra_body["chat_template_kwargs"] = {"enable_thinking": False}
     if continue_final:
         extra_body["continue_final_message"] = True
         extra_body["add_generation_prompt"] = False
@@ -97,6 +95,19 @@ def _build_messages(system_prompt: str, user_prompt: str, assistant_prefix: str 
     if assistant_prefix:
         msgs.append({"role": "assistant", "content": assistant_prefix})
     return msgs
+
+
+def _find_think_end(tokens: list[str]) -> int:
+    """Find the token index right after </think> in the token sequence.
+
+    Returns 0 if no </think> found (no thinking block present).
+    """
+    text = ""
+    for i, tok in enumerate(tokens):
+        text += tok
+        if "</think>" in text:
+            return i + 1
+    return 0
 
 
 def best_of_n(
@@ -157,9 +168,10 @@ def power_sample(
     """Block-wise MCMC power sampling from p^α (Algorithm 1).
 
     1. Generate a complete initial sequence with the full max_tokens budget.
+       If the model uses <think>...</think>, the thinking block is preserved
+       and MCMC only resamples tokens AFTER </think>.
     2. Refine via block_num rounds of MCMC, each with mcmc_steps MH proposals.
-       Each block picks a random resample position; all mcmc_steps within that
-       block resample from that position onward.
+       Each block picks a random resample position in the post-think region.
 
     With temperature=1 proposal, the MH acceptance ratio simplifies to:
         log_ratio = (α - 1) * [Σ log_p(new) - Σ log_p(old)]
@@ -192,7 +204,7 @@ def power_sample(
     total_accepted = 0
     total_proposed = 0
 
-    # --- Step 1: Generate complete initial sequence ---
+    # --- Step 1: Generate complete initial sequence (with thinking) ---
     msgs = _build_messages(system_prompt, user_prompt)
     suffix_tokens, suffix_logprobs = _chat_generate(
         client, model, msgs, max_tokens, temperature, stop,
@@ -204,17 +216,23 @@ def power_sample(
 
     seq_len = len(suffix_tokens)
 
-    # --- Step 2: Block-wise MCMC refinement ---
+    # --- Find </think> boundary ---
+    # MCMC only resamples tokens after this index, preserving the thinking block.
+    think_end = _find_think_end(suffix_tokens)
+    resample_start = think_end  # first token eligible for resampling
+
+    # --- Step 2: Block-wise MCMC refinement (post-think only) ---
     for block_idx in range(block_num):
-        if seq_len <= 1:
+        # Need at least 1 token after think block to resample
+        if seq_len <= resample_start:
             break
 
-        # Pick a random resample position for this block
-        idx = random.randint(0, seq_len - 1)
+        # Pick a random resample position AFTER the thinking block
+        idx = random.randint(resample_start, seq_len - 1)
         remaining = seq_len - idx
 
         for step in range(mcmc_steps):
-            # Build prefix for proposal
+            # Build prefix for proposal (always includes full <think>...</think>)
             prop_prefix = "".join(suffix_tokens[:idx])
             if prop_prefix:
                 prop_msgs = _build_messages(system_prompt, user_prompt, prop_prefix)
@@ -229,8 +247,7 @@ def power_sample(
                     continue_final=prop_cont,
                 )
             except Exception:
-                # Chat template may reject certain prefixes (e.g. partial
-                # <think> tags in Qwen3). Skip this proposal.
+                # Chat template may reject certain prefixes. Skip this proposal.
                 continue
             total_generated += len(prop_tokens)
             total_proposed += 1
@@ -270,4 +287,5 @@ def power_sample(
         acceptance_rate=acceptance_rate,
         total_tokens_generated=total_generated,
         wall_time=time.time() - t0,
+        think_end_idx=think_end,
     )

@@ -328,7 +328,9 @@ def main():
             )
 
         gen_time = time.time() - t0
-        print(f"  Generation: {len(result.tokens)} tokens, "
+        post_think = len(result.tokens) - result.think_end_idx
+        print(f"  Generation: {len(result.tokens)} tokens "
+              f"(think={result.think_end_idx}, response={post_think}), "
               f"{result.total_tokens_generated} total generated, "
               f"accept={result.acceptance_rate:.2f}, {gen_time:.1f}s")
 
@@ -344,8 +346,16 @@ def main():
                                     "gen_time": gen_time})
             continue
 
+        # Strip <think>...</think> block to get the actual response
+        output_text = result.text
+        think_marker = output_text.find("</think>")
+        if think_marker >= 0:
+            output_text = output_text[think_marker + len("</think>"):].strip()
+            print(f"  Think block: {think_marker + len('</think>')} chars, "
+                  f"response: {len(output_text)} chars")
+
         # Extract reasoning (everything before the first sed command)
-        reasoning = result.text
+        reasoning = output_text
         first_sed = reasoning.find("sed -i")
         if first_sed > 0:
             reasoning = reasoning[:first_sed].strip()
@@ -355,8 +365,8 @@ def main():
         log_trace(Path(OUTPUT_DIR), args.run_name, turn, user_prompt,
                   [{"role": "assistant", "content": result.text}])
 
-        # Parse and validate sed commands against baseline
-        sed_commands = parse_sed_commands(result.text)
+        # Parse and validate sed commands against baseline (from post-think text only)
+        sed_commands = parse_sed_commands(output_text)
         print(f"  Sed commands found: {len(sed_commands)}")
         sed_commands = validate_sed_commands(baseline, sed_commands)
         print(f"  Sed commands valid: {len(sed_commands)}")
