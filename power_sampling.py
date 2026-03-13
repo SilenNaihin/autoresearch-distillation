@@ -217,10 +217,15 @@ def power_sample(
                 prop_msgs = _build_messages(system_prompt, user_prompt)
                 prop_cont = False
 
-            prop_tokens, prop_logprobs = _chat_generate(
-                client, model, prop_msgs, remaining, temperature, stop,
-                continue_final=prop_cont,
-            )
+            try:
+                prop_tokens, prop_logprobs = _chat_generate(
+                    client, model, prop_msgs, remaining, temperature, stop,
+                    continue_final=prop_cont,
+                )
+            except Exception:
+                # Chat template may reject certain prefixes (e.g. partial
+                # <think> tags in Qwen3). Skip this proposal.
+                continue
             total_generated += len(prop_tokens)
             total_proposed += 1
 
