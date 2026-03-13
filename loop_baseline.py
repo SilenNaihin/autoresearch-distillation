@@ -85,9 +85,9 @@ Search for novel techniques — architecture changes, new optimizations, trainin
 - Think carefully about what will improve training, then make correct edits.\
 """
 
-# Experiments run on box1 H100 — inference on A100 via remote vLLM.
-# box1 is commented out of the shared FLEET (reserved for SDPO), so we define it here.
-EXPERIMENT_FLEET = [GPUSlot("h100_azure", "0", "box1-gpu0", "~/autoresearch")]
+# Experiments run on h100-dev-box-2 via self-SSH (localhost).
+# Inference stays on A100 (a100-backup-1) via remote vLLM.
+EXPERIMENT_FLEET = [GPUSlot("localhost", "0", "box2-gpu0", "~/autoresearch")]
 
 MODEL = "Qwen/Qwen3-14B"
 VLLM_BASE_URL = "http://20.125.45.203:8000/v1"
