@@ -32,10 +32,26 @@ from experiment_cache import SDPO_CACHE, ExperimentCache
 # Ensure SDPO's verl is importable
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "SDPO"))
 
-from verl.experimental.agent_loop.agent_loop import AgentLoopOutput, register
+from verl.experimental.agent_loop.agent_loop import AgentLoopBase, AgentLoopOutput, register
 from verl.experimental.agent_loop.tool_agent_loop import AgentState, ToolAgentLoop
 from verl.experimental.agent_loop.tool_parser import FunctionCall
 from verl.tools.schemas import ToolResponse
+
+# ---------------------------------------------------------------------------
+# Monkey-patch: inject global_step into kwargs so our run() can see it.
+# trajectory["step"] is available in _run_agent_loop but not forwarded.
+# ---------------------------------------------------------------------------
+_original_run_agent_loop = AgentLoopBase._run_agent_loop
+
+
+async def _patched_run_agent_loop(self, sampling_params, trajectory, *, agent_name, trace=True, **kwargs):
+    kwargs["global_step"] = trajectory.get("step", -1)
+    return await _original_run_agent_loop(
+        self, sampling_params, trajectory, agent_name=agent_name, trace=trace, **kwargs
+    )
+
+
+AgentLoopBase._run_agent_loop = _patched_run_agent_loop
 
 logger = logging.getLogger(__name__)
 logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "WARN"))
@@ -93,6 +109,13 @@ class AutoresearchAgentLoop(ToolAgentLoop):
 
     async def run(self, sampling_params: dict[str, Any], **kwargs) -> AgentLoopOutput:
         """Override run() to add pre-creation and post-submission logic."""
+        # Validate that monkey-patch forwarded the step number
+        global_step = kwargs.get("global_step")
+        assert global_step is not None and global_step >= 0, (
+            f"global_step not forwarded to agent loop (got {global_step!r}). "
+            "Monkey-patch of AgentLoopBase._run_agent_loop may have failed."
+        )
+
         # Reset per-trajectory tool call stats
         self._total_tool_calls = 0
         self._failed_tool_calls = 0  # malformed JSON, errors
