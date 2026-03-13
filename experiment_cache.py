@@ -59,6 +59,10 @@ class ExperimentCache:
         self._best_val_bpb: float = 1e9
         self._best_diff: str = ""
         self._load()
+        # Snapshot keys at load time — only these count as cache hits.
+        # Entries added during this step (by sibling rollouts) are written
+        # to disk for future steps but won't short-circuit current rollouts.
+        self._loaded_keys: frozenset[str] = frozenset(self._cache.keys())
 
     def _load(self):
         """Load all cache files into memory."""
@@ -126,10 +130,16 @@ class ExperimentCache:
         return hashlib.sha256(diff_text.encode()).hexdigest()
 
     def get(self, diff_text: str) -> dict | None:
-        """Look up cached result for a diff. Returns None on miss."""
+        """Look up cached result for a diff. Returns None on miss.
+
+        Only returns entries that existed at load time, not entries added
+        during this step by sibling rollouts.
+        """
         h = self.diff_hash(diff_text)
         with self._lock:
-            return self._cache.get(h)
+            if h in self._loaded_keys:
+                return self._cache.get(h)
+            return None
 
     def put(self, diff_text: str, result: dict,
             val_bpb: float | None = None, diff_text_raw: str | None = None):
