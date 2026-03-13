@@ -265,6 +265,8 @@ def main():
 
     best_val_bpb = float("inf")
     turn_results: list[dict] = []
+    best_trajectory_summary: str = ""
+    previous_trajectory_summary: str = ""
 
     for turn in range(args.max_turns):
         t0 = time.time()
@@ -273,7 +275,8 @@ def main():
         print(f"{'='*60}")
 
         # Build prompt
-        feedback_block = format_feedback_prompt(turn_results)
+        feedback_block = format_feedback_prompt(
+            turn_results, best_trajectory_summary, previous_trajectory_summary)
         user_prompt = build_power_prompt(baseline, feedback_block)
 
         # Generate with power sampling or best-of-n
@@ -317,6 +320,13 @@ def main():
             log_jsonl(output_path, {"turn": turn, "status": "empty_generation",
                                     "gen_time": gen_time})
             continue
+
+        # Extract reasoning (everything before the first sed command)
+        reasoning = result.text
+        first_sed = reasoning.find("sed -i")
+        if first_sed > 0:
+            reasoning = reasoning[:first_sed].strip()
+        previous_trajectory_summary = reasoning
 
         # Log the full generation as trace
         log_trace(Path(OUTPUT_DIR), args.run_name, turn, user_prompt,
@@ -387,6 +397,7 @@ def main():
         reward, status, reward_feedback = compute_reward(val_bpb, best_val_bpb)
         if status == "improvement":
             best_val_bpb = val_bpb
+            best_trajectory_summary = previous_trajectory_summary
 
         memory_gb = metrics.get("peak_vram_mb", 0) / 1024
         depth = metrics.get("depth")
