@@ -109,9 +109,11 @@ class AutoresearchAgentLoop(ToolAgentLoop):
         self._sed_failed = None
 
         # Inject best-diff into prompt so model can build on best result
+        self._best_diff_used = ""
         if self._inject_best_diff and "raw_prompt" in kwargs:
             best_diff = self._cache.get_best_diff()
             if best_diff:
+                self._best_diff_used = best_diff
                 kwargs["raw_prompt"] = list(kwargs["raw_prompt"])  # don't mutate dataset
                 last_msg = dict(kwargs["raw_prompt"][-1])
                 last_msg["content"] += f"\n\n## Best result so far\n{best_diff}"
@@ -152,7 +154,7 @@ class AutoresearchAgentLoop(ToolAgentLoop):
             for k in ("val_bpb", "peak_vram_mb", "training_seconds", "total_seconds",
                       "mfu_percent", "total_tokens_M", "num_steps", "num_params_M", "depth"):
                 env_metrics[f"env_{k}"] = float(getattr(self, '_last_env_metrics', {}).get(k, float('nan')))
-            output.extra_fields["reward_extra_info"] = {"feedback": feedback, **env_metrics}
+            output.extra_fields["reward_extra_info"] = {"feedback": feedback, "best_diff_used": self._best_diff_used, **env_metrics}
 
             return output
         finally:
