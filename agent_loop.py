@@ -76,6 +76,7 @@ def _get_pool():
 # ---------------------------------------------------------------------------
 
 INJECT_BEST_DIFF = True
+print(f"[autoresearch] INJECT_BEST_DIFF={INJECT_BEST_DIFF}")
 
 @register("autoresearch_agent")
 class AutoresearchAgentLoop(ToolAgentLoop):
