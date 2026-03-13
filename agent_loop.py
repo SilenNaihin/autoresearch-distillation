@@ -75,6 +75,8 @@ def _get_pool():
 # Agent loop
 # ---------------------------------------------------------------------------
 
+INJECT_BEST_DIFF = True
+
 @register("autoresearch_agent")
 class AutoresearchAgentLoop(ToolAgentLoop):
     """Multi-turn agent loop: bash editing → GPU experiment → reward.
@@ -85,9 +87,8 @@ class AutoresearchAgentLoop(ToolAgentLoop):
       3. Compute reward from experiment results
     """
 
-    def __init__(self, *args, inject_best_diff: bool = False, **kwargs):
+    def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self._inject_best_diff = inject_best_diff
 
         self._sed_failed: str | None = None  # tracked but no longer triggers early termination
         self._cache = ExperimentCache(write_path=SDPO_CACHE)  # persistent, shared with baseline
@@ -110,7 +111,7 @@ class AutoresearchAgentLoop(ToolAgentLoop):
 
         # Inject best-diff into prompt so model can build on best result
         self._best_diff_used = ""
-        if self._inject_best_diff and "raw_prompt" in kwargs:
+        if INJECT_BEST_DIFF and "raw_prompt" in kwargs:
             best_diff = self._cache.get_best_diff()
             if best_diff:
                 self._best_diff_used = best_diff

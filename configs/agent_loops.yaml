@@ -1,4 +1,3 @@
 - name: autoresearch_agent
   _target_: agent_loop.AutoresearchAgentLoop
   _recursive_: false
-  inject_best_diff: true

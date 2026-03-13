@@ -38,8 +38,8 @@ class GPUSlot:
 FLEET = [
     # h100-dev-box: 1x H100 NVL — down as of 2026-03-09
     # GPUSlot("h100_azure",      "0", "box1-gpu0", "~/autoresearch"),
-    # h100-dev-box-2: 1x H100 NVL
-    GPUSlot("h100-dev-box-2",  "0", "box2-gpu0", "~/autoresearch"),
+    # h100-dev-box-2: 1x H100 NVL — removed from fleet 2026-03-13
+    # GPUSlot("h100-dev-box-2",  "0", "box2-gpu0", "~/autoresearch"),
     # h100-dev-box-4: 2x H100 — separate dirs per GPU
     GPUSlot("h100-dev-box-4",  "0", "box4-gpu0", "~/autoresearch-gpu0"),
     GPUSlot("h100-dev-box-4",  "1", "box4-gpu1", "~/autoresearch-gpu1"),
