@@ -85,12 +85,9 @@ class AutoresearchAgentLoop(ToolAgentLoop):
       3. Compute reward from experiment results
     """
 
-    def __init__(self, *args, behavioral_feedback: bool = False, **kwargs):
+    def __init__(self, *args, inject_best_diff: bool = False, **kwargs):
         super().__init__(*args, **kwargs)
-        self._best_val_bpb = float("inf")
-        self._best_diff: str = ""  # diff that produced the best val_bpb so far
-        self._best_lock = threading.Lock()
-        self._behavioral_feedback = behavioral_feedback
+        self._inject_best_diff = inject_best_diff
         self._sed_failed: str | None = None  # tracked but no longer triggers early termination
         self._cache = ExperimentCache(write_path=SDPO_CACHE)  # persistent, shared with baseline
 
@@ -101,6 +98,15 @@ class AutoresearchAgentLoop(ToolAgentLoop):
         self._failed_tool_calls = 0  # malformed JSON, errors
         self._noop_tool_calls = 0    # commands that don't touch train.py
         self._sed_failed = None
+
+        # Inject best-diff into prompt so model can build on best result
+        if self._inject_best_diff and "raw_prompt" in kwargs:
+            best_diff = self._cache.get_best_diff()
+            if best_diff:
+                kwargs["raw_prompt"] = list(kwargs["raw_prompt"])  # don't mutate dataset
+                last_msg = dict(kwargs["raw_prompt"][-1])
+                last_msg["content"] += f"\n\n## Best result so far\n{best_diff}"
+                kwargs["raw_prompt"][-1] = last_msg
 
         # Pre-create persistent bash tool instance
         bash_tool = self.tools.get("bash")
@@ -234,20 +240,6 @@ class AutoresearchAgentLoop(ToolAgentLoop):
         baseline = Path(bash_tool.autoresearch_dir, "train.py").read_text()
         diff_text = _make_diff(baseline, modified)
 
-        # Build behavioral notes for teacher feedback (gated by config)
-        notes_text = ""
-        if self._behavioral_feedback:
-            notes = []
-            if baseline == modified:
-                notes.append("Warning: No changes were made to train.py before submitting.")
-            if self._noop_tool_calls > 0:
-                notes.append(f"Warning: {self._noop_tool_calls} of {self._total_tool_calls} tool calls did not modify train.py.")
-            if self._failed_tool_calls > 0:
-                notes.append(f"Warning: {self._failed_tool_calls} tool calls had malformed arguments.")
-            if self._empty_thinking:
-                notes.append("Warning: You did not use chain of thought. You must reason step-by-step inside <think> tags before making changes.")
-            notes_text = "\n".join(notes)
-
         from environment import BASELINE_VAL_BPB, compute_reward, parse_metrics
 
         if baseline == modified:
@@ -255,19 +247,14 @@ class AutoresearchAgentLoop(ToolAgentLoop):
                 feedback = (f"FAILURE: your sed command failed: {self._sed_failed}\n\n"
                             "You must specify the target file and ensure the pattern matches exactly.")
             else:
-                feedback = "This exact set of changes has been tried before. Try a different approach."
-            return 0.0, f"{feedback}\n\n{notes_text}" if notes_text else feedback
+                feedback = "No changes were made to train.py. Try a different approach."
+            return 0.0, feedback
 
         # Check experiment cache — successful runs and CUDA OOMs are cached
         cached = self._cache.get(diff_text)
         if cached is not None:
             reward, feedback = cached["reward"], cached["feedback"]
-            novelty_text = "This exact set of changes has been tried before. Try a different approach."
-            notes_text = f"{notes_text}\n{novelty_text}" if notes_text else novelty_text
-            return reward, f"{feedback}\n\n{notes_text}" if notes_text else feedback
-
-        novelty_text = "Continue to try new creative attempts."
-        notes_text = f"{notes_text}\n{novelty_text}" if notes_text else novelty_text
+            return reward, f"{feedback}\n\nThis exact set of changes has been tried before. Try a different approach."
 
         # Dispatch to GPU fleet (blocking I/O → run in thread)
         pool = _get_pool()
@@ -293,7 +280,7 @@ class AutoresearchAgentLoop(ToolAgentLoop):
             # Cache CUDA OOMs (deterministic), but not transient crashes (SSH, segfault)
             if "CUDA out of memory" in crash_info:
                 self._cache.put(diff_text, {"reward": -1.0, "feedback": feedback})
-            return -1.0, f"{feedback}\n\n{notes_text}" if notes_text else feedback
+            return -1.0, f"{feedback}\n\nContinue to try new creative attempts."
         val_bpb = metrics.get("val_bpb")
 
         if val_bpb is None:
@@ -302,23 +289,21 @@ class AutoresearchAgentLoop(ToolAgentLoop):
             feedback = (f"Changes from previous attempt:\n{diff_text}\n\n"
                         f"We were not able to run your experiment. Output tail:\n{tail}")
             # Don't cache missing metrics — may be transient
-            return 0.0, feedback
+            return 0.0, f"{feedback}\n\nContinue to try new creative attempts."
 
-        with self._best_lock:
-            reward, status, reward_feedback = compute_reward(val_bpb, self._best_val_bpb)
-            if status == "improvement" and val_bpb is not None:
-                self._best_val_bpb = val_bpb
-                self._best_diff = f"{diff_text}\nval_bpb={val_bpb:.6f}"
+        reward, status, reward_feedback = compute_reward(val_bpb)
 
         logger.info(f"Experiment: val_bpb={val_bpb}, reward={reward:.4f}, status={status}")
         metrics_line = " | ".join(f"{k}: {metrics[k]:g}" for k in ("num_steps", "num_params_M", "peak_vram_mb", "mfu_percent"))
         degradation = val_bpb - BASELINE_VAL_BPB
         if degradation > 0.05:
             reward_feedback += f" These changes made validation loss significantly worse (degraded by {degradation:.6f})."
-        best_text = f"Changes that produced the best result so far:\n{self._best_diff}\n\n" if self._best_diff else ""
-        feedback = f"{best_text}Changes from previous attempt:\n{diff_text}\n\n{reward_feedback}\n{metrics_line}"
 
-        # Cache successful result
-        self._cache.put(diff_text, {"reward": reward, "feedback": feedback})
+        # Build feedback without best_text (best_text is dynamic, shouldn't be cached)
+        feedback = f"Changes from previous attempt:\n{diff_text}\n\n{reward_feedback}\n{metrics_line}"
 
-        return reward, f"{feedback}\n\n{notes_text}" if notes_text else feedback
+        # Cache successful result and update best if this is a new low
+        self._cache.put(diff_text, {"reward": reward, "feedback": feedback},
+                        val_bpb=val_bpb, diff_text_raw=diff_text)
+
+        return reward, f"{feedback}\n\nContinue to try new creative attempts."

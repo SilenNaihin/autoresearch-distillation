@@ -28,7 +28,7 @@ Violating this triggers an assertion error.
 
 ## Workflow
 1. Think step-by-step about what changes could lower val_bpb (architecture, hyperparameters, optimization, etc.)
-2. Make targeted edits to train.py using sed. Do not rewrite the entire file. Example:
+2. Make targeted edits to train.py using sed. Use one tool call per turn. Do not rewrite the entire file. Example:
    <tool_call>
    {"name": "bash", "arguments": {"command": "sed -i 's/OLD_VALUE/NEW_VALUE/' train.py"}}
    </tool_call>
