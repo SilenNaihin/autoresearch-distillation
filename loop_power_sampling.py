@@ -299,7 +299,7 @@ def main():
 
         # Build prompt
         feedback_block = format_feedback_prompt(
-            turn_results, best_trajectory_summary, previous_trajectory_summary)
+            turn_results, best_trajectory_summary)
         user_prompt = build_power_prompt(baseline, feedback_block)
 
         # Generate with power sampling or best-of-n
