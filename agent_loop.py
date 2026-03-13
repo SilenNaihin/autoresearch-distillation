@@ -114,10 +114,10 @@ class AutoresearchAgentLoop(ToolAgentLoop):
             best_diff = self._cache.get_best_diff()
             if best_diff:
                 self._best_diff_used = best_diff
-                # Mutate in-place so the change propagates through **kwargs
-                # boundary to _agent_loop_postprocess (for teacher reprompt)
-                last_msg = kwargs["raw_prompt"][-1]
+                kwargs["raw_prompt"] = list(kwargs["raw_prompt"])  # don't mutate dataset
+                last_msg = dict(kwargs["raw_prompt"][-1])
                 last_msg["content"] += f"\n\n## Best result so far\n{best_diff}"
+                kwargs["raw_prompt"][-1] = last_msg
 
         # Pre-create persistent bash tool instance
         bash_tool = self.tools.get("bash")
@@ -155,6 +155,10 @@ class AutoresearchAgentLoop(ToolAgentLoop):
                       "mfu_percent", "total_tokens_M", "num_steps", "num_params_M", "depth"):
                 env_metrics[f"env_{k}"] = float(getattr(self, '_last_env_metrics', {}).get(k, float('nan')))
             output.extra_fields["reward_extra_info"] = {"feedback": feedback, "best_diff_used": self._best_diff_used, **env_metrics}
+
+            # Store modified prompt (with best diff) for teacher reprompt
+            if self._best_diff_used:
+                output.extra_fields["prompt_with_best_diff"] = kwargs["raw_prompt"]
 
             return output
         finally:
