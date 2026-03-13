@@ -78,7 +78,8 @@ class ExperimentCache:
                     # Handle both flat format and structured format
                     if "diffs" in data:
                         self._cache.update(data["diffs"])
-                        if data.get("best_val_bpb", 1e9) < self._best_val_bpb:
+                        best = data.get("best_val_bpb")
+                    if best is not None and best < self._best_val_bpb:
                             self._best_val_bpb = data["best_val_bpb"]
                             self._best_diff = data.get("best_diff", "")
                     else:
