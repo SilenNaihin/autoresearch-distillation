@@ -1,0 +1,849 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Self-Distillation for Automated ML Research</title>
+  <style>
+    :root {
+      --text: #1a1a1a;
+      --text-secondary: #555;
+      --accent: #2563eb;
+      --accent-light: #dbeafe;
+      --bg: #ffffff;
+      --bg-alt: #f8f9fa;
+      --border: #e2e8f0;
+      --code-bg: #f1f5f9;
+      --success: #16a34a;
+      --muted: #94a3b8;
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      color: var(--text);
+      background: var(--bg);
+      line-height: 1.7;
+      font-size: 17px;
+    }
+
+    .container {
+      max-width: 860px;
+      margin: 0 auto;
+      padding: 0 24px;
+    }
+
+    /* Header */
+    header {
+      padding: 80px 0 40px;
+      text-align: center;
+    }
+
+    header h1 {
+      font-size: 2.4em;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      line-height: 1.2;
+      margin-bottom: 24px;
+    }
+
+    .authors {
+      font-size: 1.15em;
+      color: var(--text-secondary);
+      margin-bottom: 8px;
+    }
+
+    .authors a {
+      color: var(--text);
+      text-decoration: none;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .authors a:hover { border-bottom-color: var(--accent); }
+
+    .affiliations {
+      font-size: 0.95em;
+      color: var(--muted);
+      margin-bottom: 28px;
+    }
+
+    .links {
+      display: flex;
+      justify-content: center;
+      gap: 16px;
+      flex-wrap: wrap;
+    }
+
+    .links a {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 8px 20px;
+      border-radius: 8px;
+      font-size: 0.9em;
+      font-weight: 500;
+      text-decoration: none;
+      color: var(--text);
+      background: var(--bg-alt);
+      border: 1px solid var(--border);
+      transition: all 0.15s ease;
+    }
+
+    .links a:hover {
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+
+    /* Divider */
+    hr {
+      border: none;
+      height: 1px;
+      background: linear-gradient(to right, transparent, var(--border), transparent);
+      margin: 48px 0;
+    }
+
+    /* Sections */
+    section { margin-bottom: 56px; }
+
+    h2 {
+      font-size: 1.5em;
+      font-weight: 700;
+      margin-bottom: 20px;
+      letter-spacing: -0.01em;
+    }
+
+    h3 {
+      font-size: 1.15em;
+      font-weight: 600;
+      margin-bottom: 12px;
+      margin-top: 28px;
+    }
+
+    p { margin-bottom: 16px; }
+
+    .abstract {
+      font-size: 1.05em;
+      color: var(--text-secondary);
+      border-left: 3px solid var(--accent);
+      padding-left: 20px;
+    }
+
+    /* Key result callout */
+    .key-result {
+      background: linear-gradient(135deg, #eff6ff, #f0fdf4);
+      border: 1px solid #bfdbfe;
+      border-radius: 12px;
+      padding: 28px 32px;
+      text-align: center;
+      margin: 32px 0;
+    }
+
+    .key-result .number {
+      font-size: 2.8em;
+      font-weight: 800;
+      color: var(--accent);
+      letter-spacing: -0.03em;
+    }
+
+    .key-result .label {
+      font-size: 1em;
+      color: var(--text-secondary);
+      margin-top: 4px;
+    }
+
+    .key-result-row {
+      display: flex;
+      justify-content: center;
+      gap: 48px;
+      flex-wrap: wrap;
+    }
+
+    .key-result-item { text-align: center; }
+
+    /* Diagram */
+    .diagram {
+      background: var(--bg-alt);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 32px;
+      margin: 24px 0;
+      overflow-x: auto;
+    }
+
+    .diagram pre {
+      font-family: "SF Mono", "Fira Code", "Fira Mono", Menlo, Consolas, monospace;
+      font-size: 0.82em;
+      line-height: 1.5;
+      color: var(--text);
+      white-space: pre;
+    }
+
+    /* Tables */
+    .table-wrapper {
+      overflow-x: auto;
+      margin: 24px 0;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.92em;
+    }
+
+    th {
+      text-align: left;
+      font-weight: 600;
+      padding: 12px 16px;
+      border-bottom: 2px solid var(--text);
+      white-space: nowrap;
+    }
+
+    td {
+      padding: 10px 16px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    tr:hover td { background: var(--bg-alt); }
+
+    .best { color: var(--success); font-weight: 700; }
+    .baseline-row { background: var(--bg-alt); }
+
+    /* Method cards */
+    .method-grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 20px;
+      margin: 24px 0;
+    }
+
+    .method-card {
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 24px;
+      transition: border-color 0.15s;
+    }
+
+    .method-card:hover { border-color: var(--accent); }
+
+    .method-card h3 {
+      margin-top: 0;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .method-card .tag {
+      font-size: 0.7em;
+      font-weight: 500;
+      padding: 2px 10px;
+      border-radius: 20px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .tag-rl { background: #fef3c7; color: #92400e; }
+    .tag-icl { background: #dbeafe; color: #1e40af; }
+    .tag-mcmc { background: #f3e8ff; color: #6b21a8; }
+
+    .method-card p {
+      font-size: 0.95em;
+      color: var(--text-secondary);
+      margin-bottom: 0;
+    }
+
+    .method-card .stat {
+      display: inline-block;
+      margin-top: 12px;
+      font-size: 0.85em;
+      font-weight: 600;
+      color: var(--text);
+      background: var(--bg-alt);
+      padding: 4px 12px;
+      border-radius: 6px;
+    }
+
+    /* Code blocks */
+    code {
+      font-family: "SF Mono", "Fira Code", Menlo, Consolas, monospace;
+      font-size: 0.88em;
+      background: var(--code-bg);
+      padding: 2px 6px;
+      border-radius: 4px;
+    }
+
+    pre {
+      background: var(--code-bg);
+      border-radius: 8px;
+      padding: 20px;
+      overflow-x: auto;
+      margin: 16px 0;
+    }
+
+    pre code {
+      background: none;
+      padding: 0;
+      font-size: 0.85em;
+      line-height: 1.6;
+    }
+
+    /* Collapsible sections */
+    details {
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 0;
+      margin: 20px 0;
+    }
+
+    details summary {
+      padding: 16px 24px;
+      cursor: pointer;
+      font-weight: 600;
+      font-size: 1.05em;
+      list-style: none;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    details summary::-webkit-details-marker { display: none; }
+
+    details summary::before {
+      content: ">";
+      font-family: monospace;
+      font-size: 0.9em;
+      color: var(--muted);
+      transition: transform 0.2s;
+      display: inline-block;
+    }
+
+    details[open] summary::before { transform: rotate(90deg); }
+
+    details .details-content {
+      padding: 0 24px 20px;
+      font-size: 0.95em;
+    }
+
+    /* Wandb embed placeholder */
+    .chart-placeholder {
+      background: var(--bg-alt);
+      border: 2px dashed var(--border);
+      border-radius: 12px;
+      padding: 48px 24px;
+      text-align: center;
+      color: var(--muted);
+      font-size: 0.95em;
+      margin: 24px 0;
+    }
+
+    /* Diff block */
+    .diff-block {
+      background: var(--code-bg);
+      border-radius: 8px;
+      padding: 16px 20px;
+      margin: 16px 0;
+      font-family: "SF Mono", "Fira Code", Menlo, Consolas, monospace;
+      font-size: 0.82em;
+      line-height: 1.6;
+      overflow-x: auto;
+    }
+
+    .diff-block .add { color: #16a34a; }
+    .diff-block .del { color: #dc2626; }
+    .diff-block .meta { color: var(--muted); }
+
+    /* Footer */
+    footer {
+      border-top: 1px solid var(--border);
+      padding: 32px 0;
+      text-align: center;
+      color: var(--muted);
+      font-size: 0.85em;
+    }
+
+    footer a { color: var(--accent); text-decoration: none; }
+    footer a:hover { text-decoration: underline; }
+
+    /* Responsive */
+    @media (max-width: 640px) {
+      header { padding: 48px 0 24px; }
+      header h1 { font-size: 1.7em; }
+      .key-result-row { gap: 24px; }
+      .key-result .number { font-size: 2em; }
+      .method-grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+
+<div class="container">
+
+  <!-- Header -->
+  <header>
+    <h1>Self-Distillation for Automated ML Research</h1>
+    <div class="authors">
+      <a href="https://github.com/SilenNaihin">Silen Naihin</a> &nbsp;&middot;&nbsp;
+      <a href="https://github.com/kfallah">Kion Fallah</a>
+    </div>
+    <div class="affiliations">Independent Research</div>
+    <div class="links">
+      <a href="https://github.com/SilenNaihin/autoresearch-distillation">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+        Code
+      </a>
+      <a href="https://wandb.ai/silennai-endflow/autoresearch-sdpo">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8 1a7 7 0 100 14A7 7 0 008 1zm0 2.5a1.5 1.5 0 110 3 1.5 1.5 0 010-3zM6 8h4v5H6V8z"/></svg>
+        W&amp;B (SDPO)
+      </a>
+      <a href="https://wandb.ai/silennai-endflow/autoresearch-baseline">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8 1a7 7 0 100 14A7 7 0 008 1zm0 2.5a1.5 1.5 0 110 3 1.5 1.5 0 010-3zM6 8h4v5H6V8z"/></svg>
+        W&amp;B (Baseline)
+      </a>
+      <a href="https://github.com/karpathy/autoresearch">
+        Autoresearch
+      </a>
+      <a href="https://github.com/lasgroup/SDPO">
+        SDPO
+      </a>
+    </div>
+  </header>
+
+  <hr>
+
+  <!-- Abstract -->
+  <section>
+    <h2>Abstract</h2>
+    <div class="abstract">
+      <p>
+        Can a small open-source model learn to do ML research through reinforcement learning on live experiment outcomes?
+        We take <a href="https://github.com/karpathy/autoresearch">Karpathy's autoresearch</a> benchmark &mdash; a GPT
+        pretraining script optimized for <code>val_bpb</code> (bits per byte) under a 5-minute training budget &mdash;
+        and train <strong>Qwen3-14B</strong> to propose code modifications using
+        <a href="https://github.com/lasgroup/SDPO">Self-Distillation Policy Optimization (SDPO)</a>.
+        The model edits <code>train.py</code> via bash tools, experiments run on H100 GPUs, and scalar rewards flow back
+        into training. No separate reward model or offline data &mdash; the agent trains on live experiment outcomes.
+      </p>
+      <p>
+        SDPO achieves <strong>val_bpb&nbsp;=&nbsp;1.029</strong>, a 2.6% improvement over the unmodified baseline (1.056),
+        outperforming both a strong multi-turn in-context learning baseline and matching the improvements found by
+        frontier models in the original autoresearch experiments.
+      </p>
+    </div>
+  </section>
+
+  <!-- Key Results -->
+  <section>
+    <div class="key-result">
+      <div class="key-result-row">
+        <div class="key-result-item">
+          <div class="number">1.029</div>
+          <div class="label">SDPO best val_bpb</div>
+        </div>
+        <div class="key-result-item">
+          <div class="number">1.038</div>
+          <div class="label">ICL baseline best val_bpb</div>
+        </div>
+        <div class="key-result-item">
+          <div class="number">1.056</div>
+          <div class="label">Unmodified train.py</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <hr>
+
+  <!-- How it Works -->
+  <section>
+    <h2>How It Works</h2>
+    <p>
+      The agent receives <code>train.py</code> (a ~500-line GPT pretraining script using Muon+Adam optimizer,
+      FlashAttention 3, and sliding window attention) and must propose modifications to lower validation loss.
+      Each iteration is an edit&ndash;experiment cycle:
+    </p>
+
+    <div class="diagram">
+<pre>
+   Agent (Qwen3-14B)                              GPU Fleet (H100s)
+  ┌──────────────────────┐                        ┌──────────────────┐
+  │                      │                        │                  │
+  │  1. Read train.py    │                        │                  │
+  │  2. Think step by    │    modified train.py   │  4. Execute      │
+  │     step in &lt;think&gt;  │  ────────────────────&gt; │     uv run       │
+  │  3. Edit via sed     │                        │     train.py     │
+  │                      │    val_bpb + metrics   │     (5 min)      │
+  │  6. Receive reward   │  &lt;──────────────────── │                  │
+  │     + feedback       │                        │  5. Parse output │
+  │                      │                        │                  │
+  └──────────────────────┘                        └──────────────────┘
+           │
+           │  reward = max(0, 1.056 - val_bpb)
+           ▼
+  ┌──────────────────────┐
+  │  SDPO Weight Update  │  (or context feedback for ICL baseline)
+  └──────────────────────┘
+</pre>
+    </div>
+
+    <p>
+      The model uses a bash tool to make targeted <code>sed</code> edits. It does <em>not</em> run the experiment itself &mdash;
+      the modified script is dispatched to a remote GPU, and the outcome feeds into the next iteration.
+      Chain-of-thought is enabled: the model reasons inside <code>&lt;think&gt;</code> blocks before acting.
+    </p>
+  </section>
+
+  <hr>
+
+  <!-- Methods -->
+  <section>
+    <h2>Methods</h2>
+    <p>We compare three approaches for learning to optimize the training script, all using the same Qwen3-14B base model:</p>
+
+    <div class="method-grid">
+
+      <div class="method-card">
+        <h3>
+          SDPO <span class="tag tag-rl">RL Training</span>
+        </h3>
+        <p>
+          Self-Distillation Policy Optimization with live experiment rewards. The model generates rollouts
+          (editing train.py via bash), experiments execute on 5 parallel H100s, and rewards flow back through
+          GRPO updates. The teacher is the model itself &mdash; successful rollouts become self-distillation
+          targets. Environment feedback (diffs, metrics, crash info) is injected into the teacher prompt.
+          A novelty signal encourages exploration: novel diffs receive a bonus, while repeated diffs are
+          flagged.
+        </p>
+        <span class="stat">batch size 16 &middot; 100 epochs &middot; 5 experiment GPUs</span>
+      </div>
+
+      <div class="method-card">
+        <h3>
+          ICL Baseline <span class="tag tag-icl">In-Context Learning</span>
+        </h3>
+        <p>
+          Same model, same agent interface, same tools &mdash; no weight updates. The model accumulates
+          experiment feedback in its context window across 30 sequential turns. Each turn, it sees
+          the original train.py plus a structured history: top-3 results with full diffs, one-line
+          summaries for the rest, and classified crash reports. Learning happens purely through
+          in-context conditioning.
+        </p>
+        <span class="stat">30 sequential turns &middot; 30 tool calls/turn &middot; frozen weights</span>
+      </div>
+
+      <details>
+        <summary>
+          MCMC Power Sampling <span class="tag tag-mcmc" style="font-size: 0.65em;">Ablation</span>
+        </summary>
+        <div class="details-content">
+          <p>
+            Based on <a href="https://arxiv.org/abs/2510.14901">"Reasoning with Sampling"</a> (Karan &amp; Du, 2025).
+            The hypothesis: RL post-training primarily <em>sharpens</em> the base model distribution. If so,
+            we can approximate the same effect at inference time by sampling from p<sup>&alpha;</sup> using
+            block-wise MCMC &mdash; no training required.
+          </p>
+          <p>
+            Uses single-shot generation (no multi-turn tool use) since MCMC requires an unbroken
+            autoregressive chain. The model generates reasoning + sed commands in one pass, which are
+            parsed and applied. This introduces a confound: if it underperforms, it may be the single-shot
+            format rather than the sampling method.
+          </p>
+          <p>
+            <strong>Parameters:</strong> &alpha;=4.0, 16 blocks, 10 MCMC steps/block, temperature=1.0 (proposal = base model).
+          </p>
+        </div>
+      </details>
+
+    </div>
+  </section>
+
+  <hr>
+
+  <!-- Comparison Table -->
+  <section>
+    <h2>Method Comparison</h2>
+
+    <div class="table-wrapper">
+      <table>
+        <thead>
+          <tr>
+            <th></th>
+            <th>SDPO</th>
+            <th>ICL Baseline</th>
+            <th>MCMC Power Sampling</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Weight updates</strong></td>
+            <td>Yes (GRPO)</td>
+            <td>None</td>
+            <td>None</td>
+          </tr>
+          <tr>
+            <td><strong>Learning signal</strong></td>
+            <td>Reward &rarr; weight updates</td>
+            <td>Feedback in context</td>
+            <td>Logprob sharpening (p<sup>&alpha;</sup>)</td>
+          </tr>
+          <tr>
+            <td><strong>Agent format</strong></td>
+            <td>Multi-turn bash</td>
+            <td>Multi-turn bash</td>
+            <td>Single-shot sed</td>
+          </tr>
+          <tr>
+            <td><strong>Tool calls / turn</strong></td>
+            <td>Up to 10</td>
+            <td>Up to 30</td>
+            <td>N/A (parsed from output)</td>
+          </tr>
+          <tr>
+            <td><strong>Context window</strong></td>
+            <td>65,536 (YaRN)</td>
+            <td>65,536 (YaRN)</td>
+            <td>65,536</td>
+          </tr>
+          <tr>
+            <td><strong>Parallelism</strong></td>
+            <td>Batch size 16</td>
+            <td>1 sequential</td>
+            <td>1 sequential</td>
+          </tr>
+          <tr>
+            <td><strong>Experiment GPUs</strong></td>
+            <td>5&times; H100</td>
+            <td>1&times; H100</td>
+            <td>1&times; H100</td>
+          </tr>
+          <tr>
+            <td><strong>Inference cost</strong></td>
+            <td>1x</td>
+            <td>1x</td>
+            <td>~9x (MCMC overhead)</td>
+          </tr>
+          <tr>
+            <td><strong>Self-distillation</strong></td>
+            <td>Yes (teacher + feedback)</td>
+            <td>No</td>
+            <td>No</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>
+      The ICL baseline is intentionally given <em>more</em> tool calls per turn (30 vs 10) to make it a
+      stronger comparison. If SDPO wins despite this handicap, the weight updates are encoding
+      something that context alone cannot.
+    </p>
+  </section>
+
+  <hr>
+
+  <!-- Results -->
+  <section>
+    <h2>Results</h2>
+
+    <div class="table-wrapper">
+      <table>
+        <thead>
+          <tr>
+            <th>Method</th>
+            <th>Best val_bpb</th>
+            <th>&Delta; from baseline</th>
+            <th>% improvement</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr class="baseline-row">
+            <td>Unmodified train.py</td>
+            <td>1.056</td>
+            <td>&mdash;</td>
+            <td>&mdash;</td>
+          </tr>
+          <tr>
+            <td><strong>SDPO (Qwen3-14B)</strong></td>
+            <td class="best">1.029</td>
+            <td class="best">&minus;0.027</td>
+            <td class="best">2.6%</td>
+          </tr>
+          <tr>
+            <td>ICL Baseline (Qwen3-14B)</td>
+            <td>1.038</td>
+            <td>&minus;0.018</td>
+            <td>1.7%</td>
+          </tr>
+          <tr>
+            <td><em>MCMC Power Sampling</em></td>
+            <td colspan="3" style="color: var(--muted); font-style: italic;">In progress</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>
+      For reference, Karpathy's original autoresearch experiments with frontier models achieved approximately
+      ~0.02 reduction from the same baseline, putting our SDPO result in a comparable range.
+    </p>
+
+    <div class="chart-placeholder">
+      val_bpb over training steps / turns &mdash; W&amp;B charts to be embedded
+    </div>
+
+    <h3>Example: What the Model Learns to Try</h3>
+    <p>
+      Early in training, the model makes conservative hyperparameter tweaks. As training progresses,
+      it explores increasingly creative modifications &mdash; architecture changes, activation function
+      swaps, optimizer internals:
+    </p>
+
+    <div class="diff-block">
+<span class="meta">--- a/train.py</span>
+<span class="meta">+++ b/train.py</span>
+<span class="meta">@@ -103,7 +103,7 @@</span>
+
+     def forward(self, x):
+         x = self.c_fc(x)
+<span class="del">-        x = F.relu(x).square()</span>
+<span class="add">+        x = F.gelu(x)</span>
+         x = self.c_proj(x)
+         return x
+    </div>
+
+    <p style="font-size: 0.9em; color: var(--text-secondary);">
+      The model discovers that swapping the ReluSquared activation for GELU in the MLP &mdash;
+      one of many creative diffs generated during SDPO training.
+    </p>
+  </section>
+
+  <hr>
+
+  <!-- Analysis -->
+  <section>
+    <h2>Observations</h2>
+
+    <h3>Prompt Sensitivity</h3>
+    <p>
+      Both methods are remarkably sensitive to prompt engineering. Small changes to system prompts &mdash;
+      adding hardware constraints, tweaking exploration encouragement, restructuring feedback format &mdash;
+      can cause the model to collapse into degenerate states or unlock new exploration. This sensitivity
+      appears more pronounced at the 14B scale; larger models like Claude show less fragility to prompt phrasing.
+    </p>
+
+    <h3>Novelty Feedback Matters</h3>
+    <p>
+      A key stabilization technique: tracking seen diffs via a hash set and providing explicit novelty
+      feedback. Novel changes receive encouragement ("Continue to try new creative attempts"),
+      while repeated diffs are redirected ("This exact set of changes has been tried before. Try a different approach").
+      Without this, the model converges to repeating the same narrow set of modifications.
+    </p>
+
+    <h3>In-Context Learning Has a Ceiling</h3>
+    <p>
+      The ICL baseline plateaus after ~15&ndash;20 turns. The model exhausts novel ideas within the same
+      narrow exploration space: tuning the same ~6 hyperparameters (depth, aspect ratio, learning rates,
+      batch size) within small ranges. It rarely touches optimizer internals (Muon momentum, beta2) or
+      attempts architectural innovations &mdash; areas where the best results come from. SDPO's weight updates
+      appear to encode exploration patterns that pure context conditioning cannot.
+    </p>
+
+    <h3>Crash Rate as a Signal</h3>
+    <p>
+      ~40% of experiment attempts crash (OOM, FlashAttention errors, assertion failures).
+      Adding hardware constraints to the system prompt (VRAM limits, head_dim requirements) reduced
+      wasted turns but didn't eliminate them. The crash rate stays roughly flat across turns for ICL,
+      suggesting the model doesn't effectively learn to avoid failure modes from context feedback alone.
+    </p>
+  </section>
+
+  <hr>
+
+  <!-- Architecture -->
+  <section>
+    <h2>Infrastructure</h2>
+
+    <div class="diagram">
+<pre>
+   SDPO Training (box3)                 Experiment Fleet
+  ┌─────────────────────┐      ┌──────────────────────────────────┐
+  │ vLLM inference  [G0] │      │  box2  [G0]  ─── experiment GPU  │
+  │ FSDP2 training  [G1] │ SSH  │  box4  [G0]  ─── experiment GPU  │
+  │                      │ ───&gt; │  box4  [G1]  ─── experiment GPU  │
+  │ GPUPoolRunner        │      │  box5  [G0]  ─── experiment GPU  │
+  │  (thread-safe,       │      │  box5  [G1]  ─── experiment GPU  │
+  │   file-locked)       │      └──────────────────────────────────┘
+  └──────────────────────┘
+         2&times; H100                          5&times; H100
+
+   ICL Baseline (box1)
+  ┌─────────────────────┐      ┌──────────────────────────────────┐
+  │ vLLM (Qwen3-14B)    │ SSH  │  box1  [G0]  ─── experiment GPU  │
+  │ loop_baseline.py     │ ───&gt; │                                  │
+  └─────────────────────┘      └──────────────────────────────────┘
+         1&times; H100                          1&times; H100
+</pre>
+    </div>
+
+    <p>
+      VERL (via the SDPO fork) orchestrates RL training: rollout generation, advantage estimation,
+      and policy updates. Our custom <code>AutoresearchAgentLoop</code> extends VERL's <code>ToolAgentLoop</code>
+      with persistent bash tool instances, experiment dispatch, and reward computation.
+      Tool response tokens are masked (<code>response_mask=0</code>) so the model only trains on its own decisions.
+    </p>
+    <p>
+      A shared persistent cache (keyed by diff SHA256) avoids re-running identical experiments across
+      both SDPO and baseline. OOM crashes are cached deterministically; transient failures are retried.
+      Within SDPO training steps, cache hits are filtered by step number to prevent ordering-dependent
+      novelty bonuses across parallel workers.
+    </p>
+  </section>
+
+  <hr>
+
+  <!-- Built On -->
+  <section>
+    <h2>Built On</h2>
+    <p>
+      <strong><a href="https://github.com/karpathy/autoresearch">Autoresearch</a></strong> (Karpathy) &mdash;
+      The GPT pretraining benchmark. A single-file <code>train.py</code> that trains a GPT on FineWeb-Edu
+      with Muon+Adam optimization, FlashAttention 3, and sliding window attention.
+      The target metric <code>val_bpb</code> (bits per byte) measures compression quality on held-out data.
+    </p>
+    <p>
+      <strong><a href="https://github.com/lasgroup/SDPO">SDPO</a></strong> (Qu et al., 2025) &mdash;
+      Self-Distillation Policy Optimization. An RL method built on VERL that uses the model's own successful
+      rollouts as teacher targets, avoiding the need for a separate reward model. We extend it with
+      agentic tool use and live environment rewards.
+    </p>
+    <p>
+      <strong><a href="https://arxiv.org/abs/2510.14901">Reasoning with Sampling</a></strong> (Karan &amp; Du, 2025) &mdash;
+      The theoretical basis for our MCMC power sampling ablation. Shows that RL post-training primarily
+      sharpens the base model distribution, suggesting inference-time MCMC as an alternative.
+    </p>
+  </section>
+
+  <hr>
+
+  <!-- Citation -->
+  <section>
+    <h2>Citation</h2>
+    <pre><code>@misc{naihin2025tttautoresearch,
+  title   = {Self-Distillation for Automated ML Research},
+  author  = {Naihin, Silen and Fallah, Kion},
+  year    = {2025},
+  url     = {https://github.com/SilenNaihin/autoresearch-distillation}
+}</code></pre>
+  </section>
+
+</div>
+
+<footer>
+  <div class="container">
+    <a href="https://github.com/SilenNaihin/autoresearch-distillation">GitHub</a>
+    &nbsp;&middot;&nbsp;
+    <a href="mailto:silen.naihin@gmail.com">Contact</a>
+  </div>
+</footer>
+
+</body>
+</html>
