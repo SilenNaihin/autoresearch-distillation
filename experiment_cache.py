@@ -8,6 +8,10 @@ so results are shared across methods.
 Uses fcntl.flock for cross-process safety (multiple VERL workers may
 read/write concurrently). Tracks the best val_bpb result seen so far.
 
+Each entry stores a written_at timestamp. get() skips entries written
+after the cache was instantiated, so sibling rollouts in the same step
+don't short-circuit each other.
+
 Cache files live in outputs/cache/{baseline,sdpo}.json.
 """
 
@@ -58,11 +62,10 @@ class ExperimentCache:
         self._cache: dict[str, dict] = {}
         self._best_val_bpb: float = 1e9
         self._best_diff: str = ""
+        # Timestamp before loading — entries written after this are from
+        # the current step and should not count as cache hits.
+        self._created_at = time.time()
         self._load()
-        # Snapshot keys at load time — only these count as cache hits.
-        # Entries added during this step (by sibling rollouts) are written
-        # to disk for future steps but won't short-circuit current rollouts.
-        self._loaded_keys: frozenset[str] = frozenset(self._cache.keys())
 
     def _load(self):
         """Load all cache files into memory."""
@@ -132,19 +135,23 @@ class ExperimentCache:
     def get(self, diff_text: str) -> dict | None:
         """Look up cached result for a diff. Returns None on miss.
 
-        Only returns entries that existed at load time, not entries added
-        during this step by sibling rollouts.
+        Skips entries written after this instance was created, so sibling
+        rollouts in the same step don't short-circuit each other.
         """
         h = self.diff_hash(diff_text)
         with self._lock:
-            if h in self._loaded_keys:
-                return self._cache.get(h)
-            return None
+            entry = self._cache.get(h)
+            if entry is None:
+                return None
+            if entry.get("written_at", 0) > self._created_at:
+                return None
+            return entry
 
     def put(self, diff_text: str, result: dict,
             val_bpb: float | None = None, diff_text_raw: str | None = None):
         """Store a result and persist to disk. Optionally update best."""
         h = self.diff_hash(diff_text)
+        result["written_at"] = time.time()
         with self._lock:
             self._cache[h] = result
             self._save(val_bpb=val_bpb, diff_text=diff_text_raw)
