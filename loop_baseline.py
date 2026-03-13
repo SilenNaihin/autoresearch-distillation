@@ -62,18 +62,22 @@ Violating this triggers an assertion error.
 ## Tips
 - The training budget is fixed at 5 minutes. A configuration that processes more training steps \
 in the same time may outperform a larger model that trains fewer steps.
+- Simply tweaking hyperparameters (learning rate, depth, batch size) gives diminishing returns. \
+Search for novel techniques — architecture changes, new optimizations, training tricks from recent papers.
 
 ## Workflow
-1. Read the full file — optimizer internals, model architecture, training loop — to find all the levers. \
-Think step-by-step about what changes could lower val_bpb
-2. You can search the web for ML techniques and papers:
-   python3 search.py "muon optimizer optimal hyperparameters"
+1. Read the file to understand the full codebase:
+   cat train.py
+2. Search for relevant ML techniques and recent papers that could help:
+   python3 search.py "technique to improve small GPT training efficiency"
    python3 search.py --fetch "url"   # read a specific page
-3. Make targeted edits to train.py using sed. Do not rewrite the entire file. Example:
+3. Make targeted edits to train.py using sed:
    <tool_call>
    {"name": "bash", "arguments": {"command": "sed -i 's/OLD_VALUE/NEW_VALUE/' train.py"}}
    </tool_call>
-4. When complete, submit: echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT
+4. Verify your changes:
+   cat train.py | head -20
+5. When complete, submit: echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT
 
 ## Important
 - You are ONLY editing the file. You do NOT run experiments.
@@ -94,16 +98,16 @@ TOP_K_FULL_DIFFS = 3
 
 
 def build_instance_prompt(train_py_content: str, history_lines: list[str]) -> str:
-    """Build the task prompt with current train.py and experiment history."""
-    parts = ["## Current train.py\n```python\n" + train_py_content + "\n```"]
+    """Build the task prompt — does NOT include full train.py to force model to cat it."""
+    parts = [
+        "## train.py\n"
+        "train.py is a single-file GPT pretraining script (~500 lines). "
+        "It uses a Muon+Adam optimizer, FlashAttention 3, sliding window attention, "
+        "and trains on FineWeb-Edu data.\n\n"
+        "Start by reading the file with `cat train.py` to understand the full codebase "
+        "before making changes."
+    ]
 
-    if history_lines:
-        parts.append("## Experiment history (recent)\n```\n" + "\n".join(history_lines) + "\n```")
-        parts.append(
-            "Each row shows: iteration, val_bpb, memory_gb, status, description.\n"
-            "Learn from past experiments. Don't repeat things that didn't work. "
-            "Build on ideas that improved val_bpb."
-        )
     parts.append(
         "You may make a single focused change or combine related changes if they work together. "
         "Feel free to try completely new approaches and explore new spaces every once in a while. "
@@ -124,7 +128,8 @@ def make_diff(baseline: str, modified: str) -> str:
     ))
 
 
-def format_feedback_prompt(turn_results: list[dict], best_trajectory_summary: str = "") -> str:
+def format_feedback_prompt(turn_results: list[dict], best_trajectory_summary: str = "",
+                           previous_trajectory_summary: str = "") -> str:
     """Format accumulated results into a structured feedback block."""
     if not turn_results:
         return ""
@@ -163,6 +168,12 @@ def format_feedback_prompt(turn_results: list[dict], best_trajectory_summary: st
     if best_trajectory_summary:
         parts.append(
             f"## Reasoning from your best run\n{best_trajectory_summary}"
+        )
+
+    # Previous step reasoning (if available and different from best)
+    if previous_trajectory_summary and previous_trajectory_summary != best_trajectory_summary:
+        parts.append(
+            f"## Reasoning from your previous attempt\n{previous_trajectory_summary}"
         )
 
     # Top-K best results with full diffs
@@ -240,17 +251,13 @@ def classify_crash(error_text: str) -> str:
     return "unknown error"
 
 
-def extract_trajectory_summary(trajectory: list[dict], max_len: int = 500) -> str:
+def extract_trajectory_summary(trajectory: list[dict]) -> str:
     """Extract the model's reasoning from the first assistant message in a trajectory."""
     for msg in trajectory:
         if msg.get("role") == "assistant":
             content = msg.get("content", "")
             if isinstance(content, str) and content.strip():
-                # Take the thinking/reasoning part before any tool calls
-                text = content.strip()
-                if len(text) > max_len:
-                    text = text[:max_len] + "..."
-                return text
+                return content.strip()
     return ""
 
 
@@ -419,6 +426,7 @@ def main():
     cache = ExperimentCache(write_path=BASELINE_CACHE)
     print(f"Experiment cache: {len(cache)} entries loaded from disk")
     best_trajectory_summary: str = ""
+    previous_trajectory_summary: str = ""
     cumulative_crashes = 0
     cumulative_successes = 0
 
@@ -430,7 +438,7 @@ def main():
 
         # Build instance prompt with structured feedback
         instance_prompt = build_instance_prompt(baseline, [])
-        feedback_block = format_feedback_prompt(turn_results, best_trajectory_summary)
+        feedback_block = format_feedback_prompt(turn_results, best_trajectory_summary, previous_trajectory_summary)
         if feedback_block:
             instance_prompt += "\n\n" + feedback_block
 
@@ -474,6 +482,7 @@ def main():
             shutil.rmtree(workdir, ignore_errors=True)
 
         agent_time = time.time() - agent_t0
+        previous_trajectory_summary = extract_trajectory_summary(trajectory)
 
         # Log full trace for debugging (always, regardless of experiment outcome)
         log_trace(Path(OUTPUT_DIR), args.run_name, turn, instance_prompt, trajectory)
@@ -482,7 +491,13 @@ def main():
         n_tool_calls = sum(1 for m in trajectory if m.get("role") == "assistant"
                           and "tool_calls" in str(m.get("content", "")))
         trajectory_len = len(trajectory)
-        used_search = "search.py" in str(trajectory)
+        # Check if search.py was actually called (not just mentioned in system prompt)
+        used_search = any(
+            "search.py" in str(a.get("command", ""))
+            for m in trajectory
+            for a in (m.get("extra", {}) or {}).get("actions", [])
+            if isinstance(a, dict)
+        )
         diff_size = len(diff_text)
 
         model_thinking = extract_model_thinking(trajectory)
