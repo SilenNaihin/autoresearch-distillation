@@ -32,7 +32,7 @@ from experiment_cache import SDPO_CACHE, ExperimentCache
 # Ensure SDPO's verl is importable
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "SDPO"))
 
-from verl.experimental.agent_loop.agent_loop import AgentLoopBase, AgentLoopOutput, register
+from verl.experimental.agent_loop.agent_loop import AgentLoopOutput, AgentLoopWorker, register
 from verl.experimental.agent_loop.tool_agent_loop import AgentState, ToolAgentLoop
 from verl.experimental.agent_loop.tool_parser import FunctionCall
 from verl.tools.schemas import ToolResponse
@@ -41,7 +41,7 @@ from verl.tools.schemas import ToolResponse
 # Monkey-patch: inject global_step into kwargs so our run() can see it.
 # trajectory["step"] is available in _run_agent_loop but not forwarded.
 # ---------------------------------------------------------------------------
-_original_run_agent_loop = AgentLoopBase._run_agent_loop
+_original_run_agent_loop = AgentLoopWorker._run_agent_loop
 
 
 async def _patched_run_agent_loop(self, sampling_params, trajectory, *, agent_name, trace=True, **kwargs):
@@ -51,7 +51,7 @@ async def _patched_run_agent_loop(self, sampling_params, trajectory, *, agent_na
     )
 
 
-AgentLoopBase._run_agent_loop = _patched_run_agent_loop
+AgentLoopWorker._run_agent_loop = _patched_run_agent_loop
 
 logger = logging.getLogger(__name__)
 logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "WARN"))
@@ -113,7 +113,7 @@ class AutoresearchAgentLoop(ToolAgentLoop):
         global_step = kwargs.get("global_step")
         assert global_step is not None and global_step >= 0, (
             f"global_step not forwarded to agent loop (got {global_step!r}). "
-            "Monkey-patch of AgentLoopBase._run_agent_loop may have failed."
+            "Monkey-patch of AgentLoopWorker._run_agent_loop may have failed."
         )
 
         # Reset per-trajectory tool call stats
