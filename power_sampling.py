@@ -50,6 +50,7 @@ def _chat_generate(
     temperature: float = 1.0,
     stop: list[str] | None = None,
     continue_final: bool = False,
+    disable_thinking: bool = True,
 ) -> tuple[list[str], list[float]]:
     """Generate via chat completions with logprobs.
 
@@ -65,11 +66,16 @@ def _chat_generate(
     )
     if stop:
         kwargs["stop"] = stop
+
+    # Build extra_body: disable thinking + optional continue_final_message
+    extra_body: dict = {}
+    if disable_thinking:
+        extra_body["chat_template_kwargs"] = {"enable_thinking": False}
     if continue_final:
-        kwargs["extra_body"] = {
-            "continue_final_message": True,
-            "add_generation_prompt": False,
-        }
+        extra_body["continue_final_message"] = True
+        extra_body["add_generation_prompt"] = False
+    if extra_body:
+        kwargs["extra_body"] = extra_body
 
     response = client.chat.completions.create(**kwargs)
     choice = response.choices[0]

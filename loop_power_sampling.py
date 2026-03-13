@@ -161,6 +161,29 @@ def _parse_sed_substitution(cmd: str) -> tuple[str, str, bool] | None:
     return pattern, replacement, is_global
 
 
+def validate_sed_commands(baseline_py: str, commands: list[str]) -> list[str]:
+    """Filter sed commands to only those whose patterns match the baseline."""
+    valid = []
+    for cmd in commands:
+        if "train.py" not in cmd:
+            continue
+        parsed = _parse_sed_substitution(cmd)
+        if parsed is None:
+            continue
+        pattern, _replacement, _is_global = parsed
+        try:
+            if re.search(pattern, baseline_py):
+                valid.append(cmd)
+            else:
+                print(f"    SKIP (no match): {cmd}")
+        except re.error:
+            if pattern in baseline_py:
+                valid.append(cmd)
+            else:
+                print(f"    SKIP (no match): {cmd}")
+    return valid
+
+
 def apply_sed_commands(baseline_py: str, commands: list[str]) -> str:
     """Apply sed substitution commands to train.py content using Python regex.
 
@@ -332,16 +355,18 @@ def main():
         log_trace(Path(OUTPUT_DIR), args.run_name, turn, user_prompt,
                   [{"role": "assistant", "content": result.text}])
 
-        # Parse sed commands
+        # Parse and validate sed commands against baseline
         sed_commands = parse_sed_commands(result.text)
-        print(f"  Sed commands: {len(sed_commands)}")
+        print(f"  Sed commands found: {len(sed_commands)}")
+        sed_commands = validate_sed_commands(baseline, sed_commands)
+        print(f"  Sed commands valid: {len(sed_commands)}")
 
         if not sed_commands:
             print("  Status: no_sed_commands")
             turn_results.append({
                 "turn": turn, "val_bpb": None, "diff": "",
                 "status": "no_sed_commands",
-                "crash_reason": "no sed commands in output",
+                "crash_reason": "no sed commands matched baseline train.py",
             })
             wandb.log({"turn": turn, "status": "no_sed_commands", "reward": 0.0})
             log_jsonl(output_path, {"turn": turn, "status": "no_sed_commands",
@@ -349,7 +374,7 @@ def main():
                                     "model_output": result.text[:2000]})
             continue
 
-        # Apply sed commands
+        # Apply validated sed commands
         modified = apply_sed_commands(baseline, sed_commands)
         diff_text = make_diff(baseline, modified)
 
