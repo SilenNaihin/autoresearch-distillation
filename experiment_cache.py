@@ -79,7 +79,7 @@ class ExperimentCache:
                     if "diffs" in data:
                         self._cache.update(data["diffs"])
                         best = data.get("best_val_bpb")
-                    if best is not None and best < self._best_val_bpb:
+                        if best is not None and best < self._best_val_bpb:
                             self._best_val_bpb = data["best_val_bpb"]
                             self._best_diff = data.get("best_diff", "")
                     else:
