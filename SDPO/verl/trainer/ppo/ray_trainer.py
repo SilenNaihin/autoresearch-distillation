@@ -684,14 +684,14 @@ class RayPPOTrainer:
         response_mask = batch.batch["response_mask"]
         responses = batch.batch["responses"]
         response_texts = [self.tokenizer.decode(ids, skip_special_tokens=True) for ids in responses]
-        # Use prompt_with_best_diff if available (injected by agent loop), otherwise raw_prompt
+        # Append best_diff_used to prompt text if available (from reward_extra_info)
+        best_diffs = reward_extra_infos_dict.get("best_diff_used", [None] * len(batch.non_tensor_batch["raw_prompt"])) if reward_extra_infos_dict else [None] * len(batch.non_tensor_batch["raw_prompt"])
         prompt_texts = []
         for i, msgs in enumerate(batch.non_tensor_batch["raw_prompt"]):
-            extra = batch.non_tensor_batch.get("tool_extra_fields", [None] * len(batch.non_tensor_batch["raw_prompt"]))[i]
-            if extra and isinstance(extra, dict) and "prompt_with_best_diff" in extra:
-                prompt_texts.append(extra["prompt_with_best_diff"][-1]["content"])
-            else:
-                prompt_texts.append(msgs[-1]["content"])
+            text = msgs[-1]["content"]
+            if i < len(best_diffs) and best_diffs[i] and str(best_diffs[i]).strip():
+                text += f"\n\n## Best result so far\n{best_diffs[i]}"
+            prompt_texts.append(text)
         batch_size = batch.batch.batch_size[0]
 
         # Extract feedback if available and include_environment_feedback is enabled

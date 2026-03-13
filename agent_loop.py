@@ -156,10 +156,6 @@ class AutoresearchAgentLoop(ToolAgentLoop):
                 env_metrics[f"env_{k}"] = float(getattr(self, '_last_env_metrics', {}).get(k, float('nan')))
             output.extra_fields["reward_extra_info"] = {"feedback": feedback, "best_diff_used": self._best_diff_used, **env_metrics}
 
-            # Store modified prompt (with best diff) for teacher reprompt
-            if self._best_diff_used:
-                output.extra_fields["prompt_with_best_diff"] = kwargs["raw_prompt"]
-
             return output
         finally:
             # Clean up workdir
