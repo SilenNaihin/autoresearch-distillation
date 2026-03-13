@@ -115,7 +115,8 @@ class ExperimentCache:
                                "best_val_bpb": self._best_val_bpb,
                                "best_diff": self._best_diff}
                 # Update best if this is a new low
-                if val_bpb is not None and diff_text is not None and val_bpb < on_disk.get("best_val_bpb", 1e9):
+                existing_best = on_disk.get("best_val_bpb")
+                if val_bpb is not None and diff_text is not None and (existing_best is None or val_bpb < existing_best):
                     on_disk["best_val_bpb"] = val_bpb
                     on_disk["best_diff"] = f"{diff_text}\nval_bpb={val_bpb:.6f}"
                     self._best_val_bpb = val_bpb
