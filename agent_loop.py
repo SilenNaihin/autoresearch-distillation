@@ -32,26 +32,10 @@ from experiment_cache import SDPO_CACHE, ExperimentCache
 # Ensure SDPO's verl is importable
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "SDPO"))
 
-from verl.experimental.agent_loop.agent_loop import AgentLoopOutput, AgentLoopWorker, register
+from verl.experimental.agent_loop.agent_loop import AgentLoopOutput, register
 from verl.experimental.agent_loop.tool_agent_loop import AgentState, ToolAgentLoop
 from verl.experimental.agent_loop.tool_parser import FunctionCall
 from verl.tools.schemas import ToolResponse
-
-# ---------------------------------------------------------------------------
-# Monkey-patch: inject global_step into kwargs so our run() can see it.
-# trajectory["step"] is available in _run_agent_loop but not forwarded.
-# ---------------------------------------------------------------------------
-_original_run_agent_loop = AgentLoopWorker._run_agent_loop
-
-
-async def _patched_run_agent_loop(self, sampling_params, trajectory, *, agent_name, trace=True, **kwargs):
-    kwargs["global_step"] = trajectory.get("step", -1)
-    return await _original_run_agent_loop(
-        self, sampling_params, trajectory, agent_name=agent_name, trace=trace, **kwargs
-    )
-
-
-AgentLoopWorker._run_agent_loop = _patched_run_agent_loop
 
 logger = logging.getLogger(__name__)
 logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "WARN"))
@@ -109,12 +93,13 @@ class AutoresearchAgentLoop(ToolAgentLoop):
 
     async def run(self, sampling_params: dict[str, Any], **kwargs) -> AgentLoopOutput:
         """Override run() to add pre-creation and post-submission logic."""
-        # Validate that monkey-patch forwarded the step number
+        # Validate that VERL forwarded the step number
         global_step = kwargs.get("global_step")
         assert global_step is not None and global_step >= 0, (
             f"global_step not forwarded to agent loop (got {global_step!r}). "
-            "Monkey-patch of AgentLoopWorker._run_agent_loop may have failed."
+            "Check VERL agent_loop.py forwards global_steps from batch.meta_info."
         )
+        self._global_step = global_step
 
         # Reset per-trajectory tool call stats
         self._total_tool_calls = 0
@@ -274,7 +259,7 @@ class AutoresearchAgentLoop(ToolAgentLoop):
             return 0.0, feedback
 
         # Check experiment cache — successful runs and CUDA OOMs are cached
-        cached = self._cache.get(diff_text)
+        cached = self._cache.get(diff_text, current_step=self._global_step)
         if cached is not None:
             reward, feedback = cached["reward"], cached["feedback"]
             return reward, f"{feedback}\n\nThis exact set of changes has been tried before. Try a different approach."
@@ -302,7 +287,7 @@ class AutoresearchAgentLoop(ToolAgentLoop):
                         f"These changes caused the experiment to crash (exit {output.returncode}):\n{crash_info}")
             # Cache CUDA OOMs (deterministic), but not transient crashes (SSH, segfault)
             if "CUDA out of memory" in crash_info:
-                self._cache.put(diff_text, {"reward": -1.0, "feedback": feedback})
+                self._cache.put(diff_text, {"reward": -1.0, "feedback": feedback}, step=self._global_step)
             return -1.0, f"{feedback}\n\nContinue to try new creative attempts."
         val_bpb = metrics.get("val_bpb")
 
@@ -327,6 +312,6 @@ class AutoresearchAgentLoop(ToolAgentLoop):
 
         # Cache successful result and update best if this is a new low
         self._cache.put(diff_text, {"reward": reward, "feedback": feedback},
-                        val_bpb=val_bpb, diff_text_raw=diff_text)
+                        step=self._global_step, val_bpb=val_bpb, diff_text_raw=diff_text)
 
         return reward, f"{feedback}\n\nContinue to try new creative attempts."
