@@ -315,4 +315,4 @@ class AutoresearchAgentLoop(ToolAgentLoop):
         self._cache.put(diff_text, {"reward": reward, "feedback": feedback},
                         step=self._global_step, val_bpb=val_bpb, diff_text_raw=diff_text)
 
-        return reward, f"{feedback}\n\nContinue to try new creative attempts."
+        return reward, f"{feedback}\n\nThese are a new set of changes that have not been tried before. Continue to try new creative attempts."
