@@ -88,6 +88,7 @@ class AutoresearchAgentLoop(ToolAgentLoop):
     def __init__(self, *args, inject_best_diff: bool = False, **kwargs):
         super().__init__(*args, **kwargs)
         self._inject_best_diff = inject_best_diff
+        logger.warning(f"AutoresearchAgentLoop init: inject_best_diff={inject_best_diff}")
         self._sed_failed: str | None = None  # tracked but no longer triggers early termination
         self._cache = ExperimentCache(write_path=SDPO_CACHE)  # persistent, shared with baseline
 
@@ -255,14 +256,14 @@ class AutoresearchAgentLoop(ToolAgentLoop):
                 feedback = (f"FAILURE: your sed command failed: {self._sed_failed}\n\n"
                             "You must specify the target file and ensure the pattern matches exactly.")
             else:
-                feedback = "No changes were made to train.py. Try a different approach."
+                feedback = "No changes were made to train.py. Try a new set of creative edits."
             return 0.0, feedback
 
         # Check experiment cache — successful runs and CUDA OOMs are cached
         cached = self._cache.get(diff_text, current_step=self._global_step)
         if cached is not None:
             reward, feedback = cached["reward"], cached["feedback"]
-            return reward, f"{feedback}\n\nThis exact set of changes has been tried before. Try a different approach."
+            return reward, f"{feedback}\n\nThis exact set of changes has been tried before. Try a new set of creative edits."
 
         # Dispatch to GPU fleet (blocking I/O → run in thread)
         pool = _get_pool()
