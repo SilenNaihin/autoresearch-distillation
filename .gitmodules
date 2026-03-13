@@ -3,4 +3,4 @@
 	url = https://github.com/karpathy/autoresearch.git
 [submodule "SDPO"]
 	path = SDPO
-	url = https://github.com/lasgroup/SDPO.git
+	url = https://github.com/kfallah/SDPO.git
