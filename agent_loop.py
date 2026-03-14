@@ -75,7 +75,7 @@ def _get_pool():
 # Agent loop
 # ---------------------------------------------------------------------------
 
-INJECT_BEST_DIFF = True
+INJECT_BEST_DIFF = False
 print(f"[autoresearch] INJECT_BEST_DIFF={INJECT_BEST_DIFF}")
 
 @register("autoresearch_agent")
