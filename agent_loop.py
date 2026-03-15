@@ -272,7 +272,7 @@ class AutoresearchAgentLoop(ToolAgentLoop):
         if cached is not None:
             reward, feedback = cached["reward"], cached["feedback"]
             hits = cached.get("hits", 1)
-            if reward < 0:
+            if cached.get("crashed"):
                 suffix = "This exact set of changes has been tried before and crashed. Do not re-attempt this change."
             elif reward > 0 and hits <= SUCCESS_REINFORCEMENT_HITS:
                 suffix = (f"SUCCESS: These changes reduced validation loss. This is a good result (repeated {hits}/{SUCCESS_REINFORCEMENT_HITS}). "
@@ -308,8 +308,8 @@ class AutoresearchAgentLoop(ToolAgentLoop):
                         f"These changes caused the experiment to crash (exit {output.returncode}):\n{crash_info}")
             # Cache CUDA OOMs (deterministic), but not transient crashes (SSH, segfault)
             if "CUDA out of memory" in crash_info:
-                self._cache.put(diff_text, {"reward": -1.0, "feedback": feedback}, step=self._global_step)
-            return -1.0, f"{feedback}\n\nDo not re-attempt this change."
+                self._cache.put(diff_text, {"reward": 0.0, "feedback": feedback, "crashed": True}, step=self._global_step)
+            return 0.0, f"{feedback}\n\nDo not re-attempt this change."
         val_bpb = metrics.get("val_bpb")
 
         if val_bpb is None:
