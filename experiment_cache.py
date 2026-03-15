@@ -136,6 +136,8 @@ class ExperimentCache:
 
         Skips entries written at current_step, so sibling rollouts in
         the same step don't short-circuit each other.
+
+        Increments a hit counter on each access (for reinforcement scheduling).
         """
         h = self.diff_hash(diff_text)
         with self._lock:
@@ -144,6 +146,7 @@ class ExperimentCache:
                 return None
             if current_step >= 0 and entry.get("step", -1) == current_step:
                 return None
+            entry["hits"] = entry.get("hits", 0) + 1
             return entry
 
     def put(self, diff_text: str, result: dict, step: int = -1,

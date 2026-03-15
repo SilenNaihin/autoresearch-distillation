@@ -76,7 +76,8 @@ def _get_pool():
 # ---------------------------------------------------------------------------
 
 INJECT_BEST_DIFF = False
-print(f"[autoresearch] INJECT_BEST_DIFF={INJECT_BEST_DIFF}")
+SUCCESS_REINFORCEMENT_HITS = 20  # cache hits before switching from reinforcement to redirection
+print(f"[autoresearch] INJECT_BEST_DIFF={INJECT_BEST_DIFF} SUCCESS_REINFORCEMENT_HITS={SUCCESS_REINFORCEMENT_HITS}")
 
 @register("autoresearch_agent")
 class AutoresearchAgentLoop(ToolAgentLoop):
@@ -270,10 +271,15 @@ class AutoresearchAgentLoop(ToolAgentLoop):
         cached = self._cache.get(diff_text, current_step=self._global_step)
         if cached is not None:
             reward, feedback = cached["reward"], cached["feedback"]
+            hits = cached.get("hits", 1)
             if reward < 0:
                 suffix = "This exact set of changes has been tried before and crashed. Do not re-attempt this change."
+            elif reward > 0 and hits <= SUCCESS_REINFORCEMENT_HITS:
+                suffix = (f"SUCCESS: These changes reduced validation loss. This is a good result (repeated {hits}/{SUCCESS_REINFORCEMENT_HITS}). "
+                          "Repeat this approach and combine it with additional modifications to reduce validation loss further.")
             elif reward > 0:
-                suffix = "This exact set of changes has been tried before and reduced validation loss. Do not re-attempt this exact set of changes. Combine this change with new modifications you have not yet tried."
+                suffix = (f"This exact set of changes has been tried before and reduced validation loss (repeated {hits}/{SUCCESS_REINFORCEMENT_HITS}). "
+                          "Do not re-attempt this exact set of changes. Combine this change with new modifications you have not yet tried.")
             else:
                 suffix = "This exact set of changes has been tried before and did not reduce validation loss. Do not re-attempt this change."
             return reward, f"{feedback}\n\n{suffix}"
@@ -329,4 +335,6 @@ class AutoresearchAgentLoop(ToolAgentLoop):
         self._cache.put(diff_text, {"reward": reward, "feedback": feedback},
                         step=self._global_step, val_bpb=val_bpb, diff_text_raw=diff_text)
 
-        return reward, f"{feedback}\n\nThis is a novel change that has not been tried before. Continue exploring new and creative modifications that reduce validation loss."
+        if reward > 0:
+            return reward, f"{feedback}\n\nSUCCESS: These changes reduced validation loss. This is a good result. Repeat this approach and combine it with additional modifications to reduce validation loss further."
+        return reward, f"{feedback}\n\nThese changes did not reduce validation loss. Continue exploring new and creative modifications that reduce validation loss."
