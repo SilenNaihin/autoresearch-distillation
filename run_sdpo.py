@@ -15,6 +15,7 @@ from verl.trainer.main_ppo import TaskRunner, run_ppo
 ENV_KEYS = (
     "env_val_bpb", "env_peak_vram_mb", "env_training_seconds", "env_total_seconds",
     "env_mfu_percent", "env_total_tokens_M", "env_num_steps", "env_num_params_M", "env_depth",
+    "env_novel",
 )
 
 
