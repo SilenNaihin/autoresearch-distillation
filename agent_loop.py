@@ -156,6 +156,7 @@ class AutoresearchAgentLoop(ToolAgentLoop):
             for k in ("val_bpb", "peak_vram_mb", "training_seconds", "total_seconds",
                       "mfu_percent", "total_tokens_M", "num_steps", "num_params_M", "depth"):
                 env_metrics[f"env_{k}"] = float(getattr(self, '_last_env_metrics', {}).get(k, float('nan')))
+            env_metrics["env_novel"] = self._is_novel
             output.extra_fields["reward_extra_info"] = {"feedback": feedback, "best_diff_used": self._best_diff_used, **env_metrics}
 
             return output
@@ -241,6 +242,8 @@ class AutoresearchAgentLoop(ToolAgentLoop):
         Returns (reward, feedback) tuple. Feedback is passed through to SDPO's
         self-distillation pipeline via extra_fields["reward_extra_info"]["feedback"].
         """
+        self._is_novel = 0.0
+
         if bash_tool is None or instance_id is None:
             return 0.0, "No bash tool or instance available."
 
@@ -260,16 +263,23 @@ class AutoresearchAgentLoop(ToolAgentLoop):
                 feedback = (f"FAILURE: your sed command failed: {self._sed_failed}\n\n"
                             "You must specify the target file and ensure the pattern matches exactly.")
             else:
-                feedback = "No changes were made to train.py. Try a new set of creative edits."
+                feedback = "No changes were made to train.py. You must make new creative edits to reduce validation loss."
             return 0.0, feedback
 
         # Check experiment cache — successful runs and CUDA OOMs are cached
         cached = self._cache.get(diff_text, current_step=self._global_step)
         if cached is not None:
             reward, feedback = cached["reward"], cached["feedback"]
-            return reward, f"{feedback}\n\nThis exact set of changes has been tried before. Try a new set of creative edits."
+            if reward < 0:
+                suffix = "This exact set of changes has been tried before and crashed. Do not re-attempt this change."
+            elif reward > 0:
+                suffix = "This exact set of changes has been tried before and reduced validation loss. Do not re-attempt this exact set of changes. Combine this change with new modifications you have not yet tried."
+            else:
+                suffix = "This exact set of changes has been tried before and did not reduce validation loss. Do not re-attempt this change."
+            return reward, f"{feedback}\n\n{suffix}"
 
         # Dispatch to GPU fleet (blocking I/O → run in thread)
+        self._is_novel = 1.0
         pool = _get_pool()
         output = await asyncio.to_thread(pool.run, modified)
 
@@ -293,7 +303,7 @@ class AutoresearchAgentLoop(ToolAgentLoop):
             # Cache CUDA OOMs (deterministic), but not transient crashes (SSH, segfault)
             if "CUDA out of memory" in crash_info:
                 self._cache.put(diff_text, {"reward": -1.0, "feedback": feedback}, step=self._global_step)
-            return -1.0, f"{feedback}\n\nContinue to try new creative attempts."
+            return -1.0, f"{feedback}\n\nDo not re-attempt this change."
         val_bpb = metrics.get("val_bpb")
 
         if val_bpb is None:
@@ -302,7 +312,7 @@ class AutoresearchAgentLoop(ToolAgentLoop):
             feedback = (f"Changes from previous attempt:\n{diff_text}\n\n"
                         f"We were not able to run your experiment. Output tail:\n{tail}")
             # Don't cache missing metrics — may be transient
-            return 0.0, f"{feedback}\n\nContinue to try new creative attempts."
+            return 0.0, feedback
 
         reward, status, reward_feedback = compute_reward(val_bpb)
 
@@ -319,4 +329,4 @@ class AutoresearchAgentLoop(ToolAgentLoop):
         self._cache.put(diff_text, {"reward": reward, "feedback": feedback},
                         step=self._global_step, val_bpb=val_bpb, diff_text_raw=diff_text)
 
-        return reward, f"{feedback}\n\nThese are a new set of changes that have not been tried before. Continue to try new creative attempts."
+        return reward, f"{feedback}\n\nThis is a novel change that has not been tried before. Continue exploring new and creative modifications that reduce validation loss."
