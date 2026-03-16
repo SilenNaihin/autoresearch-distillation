@@ -84,7 +84,34 @@ def run_experiment(train_py: str, gpu_slot: str = "box5-gpu0") -> dict:
     return result
 
 
-def run_agent(client: OpenAI, model: str, system_prompt: str, instance_prompt: str,
+def _execute_text_commands(workdir: str, content: str) -> int:
+    """Extract sed/bash commands from model text output and execute them.
+
+    Some models output commands as plain text instead of tool calls.
+    Returns number of commands executed.
+    """
+    import re
+    commands_run = 0
+    # Match sed commands and echo commands in text
+    for pattern in [
+        r"```(?:bash|sh)?\n(.*?)```",  # fenced code blocks
+        r"(sed\s+-i\s+.*?)(?:\n|$)",    # inline sed commands
+    ]:
+        for match in re.finditer(pattern, content, re.DOTALL):
+            cmd = match.group(1).strip()
+            for line in cmd.split("\n"):
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if line.startswith(("sed ", "echo ", "cat ", "python")):
+                    if SUBMIT_SIGNAL in line:
+                        continue
+                    run_bash(workdir, line)
+                    commands_run += 1
+    return commands_run
+
+
+
               workdir: str, max_turns: int = 5, is_vllm: bool = True) -> tuple[list[dict], bool]:
     """Run multi-turn agent loop. Returns (messages, submitted)."""
     tools = [{
@@ -139,7 +166,6 @@ def run_agent(client: OpenAI, model: str, system_prompt: str, instance_prompt: s
                     break
 
                 output = run_bash(workdir, command)
-                # Check for submit signal in output
                 if SUBMIT_SIGNAL in output.split("\n")[0]:
                     submitted = True
                     messages.append({
@@ -152,18 +178,33 @@ def run_agent(client: OpenAI, model: str, system_prompt: str, instance_prompt: s
                 messages.append({
                     "role": "tool",
                     "tool_call_id": tc.id,
-                    "content": output[:10000]  # truncate long outputs
+                    "content": output[:10000]
                 })
 
             if submitted:
                 break
         else:
-            # No tool calls — model is done reasoning but didn't submit
-            # Add a nudge
-            if turn < max_turns - 1:
+            # Check if content contains bash commands or submit signal as text
+            # (some models output tool-like content as plain text)
+            content = msg.content or ""
+            if SUBMIT_SIGNAL in content:
+                # Extract and run any sed/bash commands from the text before submit
+                _execute_text_commands(workdir, content)
+                submitted = True
+                break
+
+            # Try to extract and run inline commands from text content
+            cmds_run = _execute_text_commands(workdir, content)
+            if cmds_run > 0:
+                # Model made edits via text — treat this turn as productive
                 messages.append({
                     "role": "user",
-                    "content": "Please make your edits and submit with: echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT"
+                    "content": "Commands executed. Submit when ready: echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT"
+                })
+            elif turn < max_turns - 1:
+                messages.append({
+                    "role": "user",
+                    "content": "Please make your edits using the bash tool and submit with: echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT"
                 })
 
     return messages, submitted
