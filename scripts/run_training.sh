@@ -17,7 +17,7 @@ if [ -f "$PROJECT_ROOT/.env" ]; then
 fi
 
 # Defaults
-EXPERIMENT_NAME="${1:-qwen3-14b-sdpo}"
+EXPERIMENT_NAME="${1:-qwen3-32b-lora-sdpo}"
 
 export RAY_TMPDIR=/data/tmp
 export TMPDIR=/data/tmp
@@ -38,6 +38,7 @@ export TASK="data/autoresearch"
 export VLLM_USE_V1=1
 export PYTHONUNBUFFERED=1
 export RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES=1
+export RAY_memory_usage_threshold=0.99
 export CUDA_VISIBLE_DEVICES=0,1
 
 # Disable VLLM_ATTENTION_BACKEND to let vLLM auto-select
@@ -46,28 +47,7 @@ unset VLLM_ATTENTION_BACKEND
 # Set ulimit
 ulimit -c 0
 
-# Patch HF cached config.json to enforce YaRN settings used by this run.
-$PYTHON -c "
-import json, glob, os
-target_max_pos = int(os.environ.get('TARGET_MAX_POSITION_EMBEDDINGS', '65536'))
-target_orig = 32768
-target_factor = float(target_max_pos) / float(target_orig)
-for p in glob.glob(os.path.expanduser('~/.cache/huggingface/hub/models--Qwen--Qwen3-14B/snapshots/*/config.json')):
-    real = os.path.realpath(p)
-    with open(real) as f: c = json.load(f)
-    changed = False
-    if c.get('max_position_embeddings') != target_max_pos:
-        c['max_position_embeddings'] = target_max_pos
-        changed = True
-    if c.get('rope_scaling') != {'rope_type': 'yarn', 'factor': target_factor, 'original_max_position_embeddings': target_orig}:
-        c['rope_scaling'] = {'rope_type': 'yarn', 'factor': target_factor, 'original_max_position_embeddings': target_orig}
-        changed = True
-    if changed:
-        with open(real, 'w') as f: json.dump(c, f, indent=2)
-        print(f'Patched context config in {real}: max_position_embeddings={target_max_pos}, rope_factor={target_factor}')
-    else:
-        print(f'context config already set in {real}')
-"
+# No HF config patching needed — Qwen3-32B uses native 32K context
 
 # Copy our config into SDPO's config directory so Hydra can find it
 cp "$PROJECT_ROOT/configs/autoresearch_sdpo.yaml" \
@@ -96,5 +76,4 @@ $PYTHON "$PROJECT_ROOT/run_sdpo.py" \
     --config-name "$CONFIG_NAME" \
     vars.dir="$PROJECT_ROOT" \
     vars.ckpt_dir="/data/checkpoints" \
-    '+actor_rollout_ref.rollout.engine_kwargs.vllm.hf_overrides.max_position_embeddings=${max_model_len}' \
     "$@"
