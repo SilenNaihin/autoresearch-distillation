@@ -40,7 +40,7 @@ actor_rollout_ref:
     policy_loss:
       loss_mode: sdpo
     self_distillation:
-      teacher_update_rate: 0.005
+      teacher_update_rate: 0.01
       max_reprompt_len: 10240
       is_clip: 2.0
       alpha: 0.5
@@ -60,7 +60,7 @@ actor_rollout_ref:
 
         Using the information above, provide the best possible solution.
     optim:
-      lr: 1e-5
+      lr: 5e-6
   rollout:
     name: vllm
     n: 1
