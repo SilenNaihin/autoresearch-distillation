@@ -265,7 +265,7 @@ class AutoresearchAgentLoop(ToolAgentLoop):
                             "You must specify the target file and ensure the pattern matches exactly.")
             else:
                 feedback = "No changes were made to train.py. You must make new creative edits to reduce validation loss."
-            return 0.0, feedback
+            return -1.0, feedback
 
         # Check experiment cache — successful runs and CUDA OOMs are cached
         cached = self._cache.get(diff_text, current_step=self._global_step)
@@ -309,7 +309,7 @@ class AutoresearchAgentLoop(ToolAgentLoop):
             # Cache CUDA OOMs (deterministic), but not transient crashes (SSH, segfault)
             if "CUDA out of memory" in crash_info:
                 self._cache.put(diff_text, {"reward": 0.0, "feedback": feedback, "crashed": True}, step=self._global_step)
-            return 0.0, f"{feedback}\n\nDo not re-attempt this change."
+            return -1.0, f"{feedback}\n\nDo not re-attempt this change."
         val_bpb = metrics.get("val_bpb")
 
         if val_bpb is None:
@@ -318,7 +318,7 @@ class AutoresearchAgentLoop(ToolAgentLoop):
             feedback = (f"Changes from previous attempt:\n{diff_text}\n\n"
                         f"We were not able to run your experiment. Output tail:\n{tail}")
             # Don't cache missing metrics — may be transient
-            return 0.0, feedback
+            return -1.0, feedback
 
         reward, status, reward_feedback = compute_reward(val_bpb)
 
