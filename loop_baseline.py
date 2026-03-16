@@ -24,6 +24,7 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import time
 from difflib import unified_diff
 from pathlib import Path
@@ -325,6 +326,25 @@ def log_trace(output_dir: Path, run_name: str, turn: int, prompt: str,
     }, ensure_ascii=True, indent=2))
 
 
+def sync_cache(host: str, cache_path: Path, direction: str = "pull"):
+    """Sync cache file to/from a remote host via scp. Fails silently."""
+    remote = f"{host}:{cache_path}"
+    local = str(cache_path)
+    try:
+        if direction == "pull":
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            subprocess.run(["scp", "-o", "ConnectTimeout=5", "-q", remote, local],
+                           capture_output=True, timeout=15)
+        else:
+            subprocess.run(["ssh", "-o", "ConnectTimeout=5", host,
+                           f"mkdir -p {cache_path.parent}"],
+                           capture_output=True, timeout=10)
+            subprocess.run(["scp", "-o", "ConnectTimeout=5", "-q", local, remote],
+                           capture_output=True, timeout=15)
+    except Exception:
+        pass  # cache sync is best-effort
+
+
 def main():
     parser = argparse.ArgumentParser(description="Multi-turn baseline (in-context learning)")
     parser.add_argument("--model", type=str, default=MODEL)
@@ -341,6 +361,8 @@ def main():
                         help="SSH host for experiment GPU (default: localhost)")
     parser.add_argument("--experiment-gpu", type=str, default="0",
                         help="CUDA device index on experiment host")
+    parser.add_argument("--cache-sync-host", type=str, default=None,
+                        help="SSH host to sync shared cache to/from (e.g. 74.179.57.153)")
     args = parser.parse_args()
 
     # Override experiment fleet if --experiment-host is set
@@ -403,6 +425,9 @@ def main():
     # Multi-turn loop
     best_val_bpb = float("inf")
     turn_results: list[dict] = []
+    cache_sync_host = args.cache_sync_host
+    if cache_sync_host:
+        sync_cache(cache_sync_host, BASELINE_CACHE, "pull")
     cache = ExperimentCache(write_path=BASELINE_CACHE)
     print(f"Experiment cache: {len(cache)} entries loaded from disk")
     cumulative_crashes = 0
@@ -410,6 +435,10 @@ def main():
 
     for turn in range(args.max_turns):
         t0 = time.time()
+        # Sync cache from remote before checking for duplicates
+        if cache_sync_host:
+            sync_cache(cache_sync_host, BASELINE_CACHE, "pull")
+            cache = ExperimentCache(write_path=BASELINE_CACHE)
         print(f"\n{'='*60}")
         print(f"Turn {turn}/{args.max_turns}")
         print(f"{'='*60}")
@@ -577,6 +606,8 @@ def main():
                     "status": "crash", "val_bpb": None,
                     "crash_reason": crash_reason,
                 })
+                if cache_sync_host:
+                    sync_cache(cache_sync_host, BASELINE_CACHE, "push")
             cumulative_crashes += 1
             turns_table.add_data(
                 turn, status, None, 0.0, diff_text, crash_reason,
@@ -628,6 +659,8 @@ def main():
             "tokens_M": int(tokens_M) if tokens_M else None,
             "memory_gb": round(memory_gb, 1),
         })
+        if cache_sync_host:
+            sync_cache(cache_sync_host, BASELINE_CACHE, "push")
 
         cumulative_successes += 1
         turns_table.add_data(
