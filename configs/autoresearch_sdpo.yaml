@@ -77,6 +77,7 @@ actor_rollout_ref:
     gpu_memory_utilization: 0.95
     max_model_len: ${max_model_len}
     max_num_batched_tokens: ${max_model_len}
+    max_num_seqs: 1
     calculate_log_probs: True
     load_format: safetensors
     layered_summon: True
