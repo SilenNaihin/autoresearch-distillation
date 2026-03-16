@@ -1,4 +1,5 @@
 # SDPO config for autoresearch on 2 GPUs (colocated vLLM + FSDP2)
+# Qwen3-32B with LoRA rank=32, alpha=64, 32K context
 # Inherits from sdpo.yaml -> ppo_trainer.yaml -> user.yaml
 # Usage: bash scripts/run_training.sh
 
@@ -6,14 +7,14 @@ defaults:
   - sdpo
   - _self_
 
-max_model_len: 65536
+max_model_len: 32768
 
 data:
   train_files: ["${vars.dir}/data/autoresearch/train.parquet"]
   val_files: ["${vars.dir}/data/autoresearch/test.parquet"]
   train_batch_size: 16
-  max_prompt_length: 16384
-  max_response_length: 49152
+  max_prompt_length: 9216
+  max_response_length: 23552
   apply_chat_template_kwargs: {"enable_thinking": true}
   return_raw_chat: True
   filter_overlong_prompts: True
@@ -22,10 +23,14 @@ data:
 
 actor_rollout_ref:
   model:
-    path: Qwen/Qwen3-14B
+    path: Qwen/Qwen3-32B
     trust_remote_code: True
     override_config:
       attn_implementation: flash_attention_2
+    lora_rank: 32
+    lora_alpha: 64
+    target_modules: all-linear
+    enable_gradient_checkpointing: True
   actor:
     ppo_micro_batch_size_per_gpu: 1
     ppo_mini_batch_size: 16
@@ -36,6 +41,8 @@ actor_rollout_ref:
     fsdp_config:
       strategy: fsdp2
       offload_policy: true
+      param_offload: true
+      optimizer_offload: false
       ulysses_sequence_parallel_size: 2
     policy_loss:
       loss_mode: sdpo
@@ -60,23 +67,18 @@ actor_rollout_ref:
 
         Using the information above, provide the best possible solution.
     optim:
-      lr: 1e-5
+      lr: 3e-5
   rollout:
     name: vllm
     n: 1
     temperature: 1.0
     tensor_model_parallel_size: 2
-    gpu_memory_utilization: 0.85
+    gpu_memory_utilization: 0.95
     max_model_len: ${max_model_len}
     max_num_batched_tokens: ${max_model_len}
     calculate_log_probs: True
-    engine_kwargs:
-      vllm:
-        hf_overrides:
-          rope_scaling:
-            rope_type: yarn
-            factor: 2.0
-            original_max_position_embeddings: 32768
+    load_format: safetensors
+    layered_summon: True
     multi_turn:
       enable: True
       max_user_turns: 10
@@ -106,9 +108,15 @@ critic:
   ppo_micro_batch_size_per_gpu: 1
   fsdp_config:
     strategy: fsdp2
+    offload_policy: true
+    param_offload: true
+    optimizer_offload: true
     ulysses_sequence_parallel_size: 2
   model:
-    path: Qwen/Qwen3-14B
+    path: Qwen/Qwen3-32B
+    lora_rank: 32
+    lora_alpha: 64
+    target_modules: all-linear
 
 custom_reward_function:
   path: ${vars.dir}/reward.py
@@ -118,7 +126,7 @@ reward_model:
 
 trainer:
   project_name: autoresearch-sdpo
-  experiment_name: qwen3-14b-sdpo
+  experiment_name: qwen3-32b-lora-sdpo
   n_gpus_per_node: 2
   nnodes: 1
   total_epochs: 1000
