@@ -85,7 +85,7 @@ def run_experiment(train_py: str, gpu_slot: str = "box5-gpu0") -> dict:
 
 
 def run_agent(client: OpenAI, model: str, system_prompt: str, instance_prompt: str,
-              workdir: str, max_turns: int = 5) -> tuple[list[dict], bool]:
+              workdir: str, max_turns: int = 5, is_vllm: bool = True) -> tuple[list[dict], bool]:
     """Run multi-turn agent loop. Returns (messages, submitted)."""
     tools = [{
         "type": "function",
@@ -109,15 +109,17 @@ def run_agent(client: OpenAI, model: str, system_prompt: str, instance_prompt: s
 
     submitted = False
     for turn in range(max_turns):
-        response = client.chat.completions.create(
+        kwargs = dict(
             model=model,
             messages=messages,
             tools=tools,
             tool_choice="auto",
             temperature=0.7,
             max_tokens=8192,
-            extra_body={"chat_template_kwargs": {"enable_thinking": True}},
         )
+        if is_vllm:
+            kwargs["extra_body"] = {"chat_template_kwargs": {"enable_thinking": True}}
+        response = client.chat.completions.create(**kwargs)
 
         msg = response.choices[0].message
         messages.append(msg.model_dump())
@@ -172,10 +174,12 @@ def main():
     parser.add_argument("--model", required=True, help="Model path or HF name")
     parser.add_argument("--name", required=True, help="Name for this eval run")
     parser.add_argument("--api-base", default="http://localhost:8000/v1", help="vLLM API base URL")
+    parser.add_argument("--api-key", default="dummy", help="API key (use OPENROUTER_API_KEY env var or pass directly)")
     parser.add_argument("--gpu-slot", default="box5-gpu0", help="GPU slot for experiment dispatch")
     parser.add_argument("--n-trials", type=int, default=3, help="Number of independent trials")
     parser.add_argument("--max-turns", type=int, default=5, help="Max agent turns per trial")
     parser.add_argument("--output-dir", default="/data/eval_baselines", help="Output directory")
+    parser.add_argument("--openrouter", action="store_true", help="Use OpenRouter API (disables vLLM-specific features)")
     args = parser.parse_args()
 
     os.makedirs(args.output_dir, exist_ok=True)
@@ -185,7 +189,11 @@ def main():
     train_py = Path(os.path.join(AUTORESEARCH_DIR, "train.py")).read_text()
     instance_prompt = build_instance_prompt(train_py, [])
 
-    client = OpenAI(base_url=args.api_base, api_key="dummy")
+    api_key = args.api_key if args.api_key != "dummy" else os.environ.get("OPENROUTER_API_KEY", "dummy")
+    api_base = args.api_base
+    if args.openrouter and api_base == "http://localhost:8000/v1":
+        api_base = "https://openrouter.ai/api/v1"
+    client = OpenAI(base_url=api_base, api_key=api_key)
 
     # Use the model name vLLM is serving (may differ from path)
     # Try to detect from /v1/models
@@ -208,7 +216,8 @@ def main():
             # Run agent
             t0 = time.time()
             messages, submitted = run_agent(client, serving_model, SYSTEM_PROMPT, instance_prompt,
-                                            workdir, max_turns=args.max_turns)
+                                            workdir, max_turns=args.max_turns,
+                                            is_vllm=not args.openrouter)
             agent_time = time.time() - t0
             print(f"  Agent: {len(messages)} messages, submitted={submitted}, {agent_time:.1f}s")
 
