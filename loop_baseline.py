@@ -59,8 +59,13 @@ DEVICE_BATCH_SIZE to compensate. Check that your changes fit in ~85 GB.
 - TOTAL_BATCH_SIZE must be divisible by (DEVICE_BATCH_SIZE * sequence_length). \
 Violating this triggers an assertion error.
 
+## Tips
+- The training budget is fixed at 5 minutes. A configuration that processes more training steps \
+in the same time may outperform a larger model that trains fewer steps.
+
 ## Workflow
-1. Think step-by-step about what changes could lower val_bpb (architecture, hyperparameters, optimization, etc.)
+1. Read the full file — optimizer internals, model architecture, training loop — to find all \
+the levers. Think step-by-step about what changes could lower val_bpb.
 2. Make targeted edits to train.py using sed. Do not rewrite the entire file. Example:
    <tool_call>
    {"name": "bash", "arguments": {"command": "sed -i 's/OLD_VALUE/NEW_VALUE/' train.py"}}
@@ -327,14 +332,43 @@ def log_trace(output_dir: Path, run_name: str, turn: int, prompt: str,
 
 
 def sync_cache(host: str, cache_path: Path, direction: str = "pull"):
-    """Sync cache file to/from a remote host via scp. Fails silently."""
+    """Sync cache file to/from a remote host via scp, merging entries.
+
+    Pull downloads to a temp file and merges into local (no overwrites).
+    Push sends local file to remote.
+    """
     remote = f"{host}:{cache_path}"
     local = str(cache_path)
     try:
         if direction == "pull":
             cache_path.parent.mkdir(parents=True, exist_ok=True)
-            subprocess.run(["scp", "-o", "ConnectTimeout=5", "-q", remote, local],
-                           capture_output=True, timeout=15)
+            tmp = str(cache_path) + ".remote"
+            r = subprocess.run(["scp", "-o", "ConnectTimeout=5", "-q", remote, tmp],
+                               capture_output=True, timeout=15)
+            if r.returncode == 0 and os.path.exists(tmp):
+                # Merge remote entries into local file
+                try:
+                    with open(tmp) as f:
+                        remote_data = json.load(f)
+                    local_data = {"diffs": {}, "best_val_bpb": 1e9, "best_diff": ""}
+                    if cache_path.exists():
+                        with open(cache_path) as f:
+                            local_data = json.load(f)
+                    if "diffs" in remote_data:
+                        local_data.setdefault("diffs", {}).update(remote_data["diffs"])
+                    rb = remote_data.get("best_val_bpb", 1e9)
+                    if rb < local_data.get("best_val_bpb", 1e9):
+                        local_data["best_val_bpb"] = rb
+                        local_data["best_diff"] = remote_data.get("best_diff", "")
+                    with open(cache_path, "w") as f:
+                        json.dump(local_data, f, ensure_ascii=True)
+                except (json.JSONDecodeError, OSError):
+                    pass
+                finally:
+                    try:
+                        os.remove(tmp)
+                    except OSError:
+                        pass
         else:
             subprocess.run(["ssh", "-o", "ConnectTimeout=5", host,
                            f"mkdir -p {cache_path.parent}"],
@@ -658,7 +692,7 @@ def main():
             "depth": int(depth) if depth else None,
             "tokens_M": int(tokens_M) if tokens_M else None,
             "memory_gb": round(memory_gb, 1),
-        })
+        }, val_bpb=val_bpb, diff_text_raw=diff_text)
         if cache_sync_host:
             sync_cache(cache_sync_host, BASELINE_CACHE, "push")
 
