@@ -142,7 +142,7 @@ def run_agent(client: OpenAI, model: str, system_prompt: str, instance_prompt: s
             tools=tools,
             tool_choice="auto",
             temperature=0.7,
-            max_tokens=16384,
+            max_tokens=8192,
         )
         if is_vllm:
             kwargs["extra_body"] = {"chat_template_kwargs": {"enable_thinking": True}}
