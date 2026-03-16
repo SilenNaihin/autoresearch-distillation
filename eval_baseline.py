@@ -111,7 +111,7 @@ def _execute_text_commands(workdir: str, content: str) -> int:
     return commands_run
 
 
-
+def run_agent(client: OpenAI, model: str, system_prompt: str, instance_prompt: str,
               workdir: str, max_turns: int = 5, is_vllm: bool = True) -> tuple[list[dict], bool]:
     """Run multi-turn agent loop. Returns (messages, submitted)."""
     tools = [{
