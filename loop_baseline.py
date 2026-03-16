@@ -36,7 +36,6 @@ from experiment_cache import BASELINE_CACHE, ExperimentCache
 from runners import GPUSlot, SSHRunner
 
 # Baseline-specific system prompt (separate from SDPO's prompts.py).
-# Includes web search instructions and hardware tips not yet in SDPO.
 BASELINE_SYSTEM_PROMPT = """\
 You are an autonomous ML researcher optimizing a GPT pretraining script.
 
@@ -59,25 +58,13 @@ DEVICE_BATCH_SIZE to compensate. Check that your changes fit in ~85 GB.
 - TOTAL_BATCH_SIZE must be divisible by (DEVICE_BATCH_SIZE * sequence_length). \
 Violating this triggers an assertion error.
 
-## Tips
-- The training budget is fixed at 5 minutes. A configuration that processes more training steps \
-in the same time may outperform a larger model that trains fewer steps.
-- Simply tweaking hyperparameters (learning rate, depth, batch size) gives diminishing returns. \
-Search for novel techniques — architecture changes, new optimizations, training tricks from recent papers.
-
 ## Workflow
-1. Read the file to understand the full codebase:
-   cat train.py
-2. Search for relevant ML techniques and recent papers that could help:
-   python3 search.py "technique to improve small GPT training efficiency"
-   python3 search.py --fetch "url"   # read a specific page
-3. Make targeted edits to train.py using sed:
+1. Think step-by-step about what changes could lower val_bpb (architecture, hyperparameters, optimization, etc.)
+2. Make targeted edits to train.py using sed. Do not rewrite the entire file. Example:
    <tool_call>
    {"name": "bash", "arguments": {"command": "sed -i 's/OLD_VALUE/NEW_VALUE/' train.py"}}
    </tool_call>
-4. Verify your changes:
-   cat train.py | head -20
-5. When complete, submit: echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT
+3. When complete, submit: echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT
 
 ## Important
 - You are ONLY editing the file. You do NOT run experiments.
@@ -121,8 +108,7 @@ def make_diff(baseline: str, modified: str) -> str:
     ))
 
 
-def format_feedback_prompt(turn_results: list[dict], best_trajectory_summary: str = "",
-                           previous_trajectory_summary: str = "") -> str:
+def format_feedback_prompt(turn_results: list[dict]) -> str:
     """Format accumulated results into a structured feedback block."""
     if not turn_results:
         return ""
@@ -155,18 +141,6 @@ def format_feedback_prompt(turn_results: list[dict], best_trajectory_summary: st
         parts.append(
             "**Your last several results are all very similar. "
             "Try something completely different — a new approach you haven't explored yet.**"
-        )
-
-    # Best run reasoning (if available)
-    if best_trajectory_summary:
-        parts.append(
-            f"## Reasoning from your best run\n{best_trajectory_summary}"
-        )
-
-    # Previous step reasoning (if available and different from best)
-    if previous_trajectory_summary and previous_trajectory_summary != best_trajectory_summary:
-        parts.append(
-            f"## Reasoning from your previous attempt\n{previous_trajectory_summary}"
         )
 
     # Top-K best results with full diffs
@@ -244,15 +218,6 @@ def classify_crash(error_text: str) -> str:
     return "unknown error"
 
 
-def extract_trajectory_summary(trajectory: list[dict]) -> str:
-    """Extract the model's reasoning from the first assistant message in a trajectory."""
-    for msg in trajectory:
-        if msg.get("role") == "assistant":
-            content = msg.get("content", "")
-            if isinstance(content, str) and content.strip():
-                return content.strip()
-    return ""
-
 
 def extract_model_thinking(trajectory: list[dict], max_len: int = 1000) -> str:
     """Extract the <think> block from the first assistant message."""
@@ -308,10 +273,10 @@ def extract_changed_variables(diff_text: str) -> list[str]:
     return changed
 
 
-def dispatch_experiment(train_py: str) -> tuple[dict, int, str]:
+def dispatch_experiment(train_py: str) -> tuple[dict, int, str, str]:
     """Dispatch modified train.py to experiment GPU.
 
-    Returns (metrics_dict, returncode, feedback_text).
+    Returns (metrics_dict, returncode, feedback_text, raw_stdout).
     """
     for slot in EXPERIMENT_FLEET:
         runner = SSHRunner(slot, timeout=600)
@@ -322,18 +287,19 @@ def dispatch_experiment(train_py: str) -> tuple[dict, int, str]:
 
         metrics = parse_metrics(output.stdout) if output.stdout else {}
         val_bpb = metrics.get("val_bpb")
+        raw_stdout = output.stdout or ""
 
         if output.returncode != 0:
             crash_tail = (output.stderr or output.stdout or "no output").strip()[-500:]
-            return metrics, output.returncode, f"Experiment crashed (exit {output.returncode}):\n{crash_tail}"
+            return metrics, output.returncode, f"Experiment crashed (exit {output.returncode}):\n{crash_tail}", raw_stdout
 
         if val_bpb is None:
             tail = "\n".join((output.stdout or "").strip().splitlines()[-15:])
-            return metrics, 0, f"Experiment ran but produced no val_bpb. Output tail:\n{tail}"
+            return metrics, 0, f"Experiment ran but produced no val_bpb. Output tail:\n{tail}", raw_stdout
 
-        return metrics, 0, ""
+        return metrics, 0, "", raw_stdout
 
-    return {}, -1, "All experiment GPUs unreachable."
+    return {}, -1, "All experiment GPUs unreachable.", ""
 
 
 def log_jsonl(path: Path, payload: dict):
@@ -342,8 +308,10 @@ def log_jsonl(path: Path, payload: dict):
         f.write(json.dumps(payload, ensure_ascii=True) + "\n")
 
 
-def log_trace(output_dir: Path, run_name: str, turn: int, prompt: str, trajectory: list[dict]):
-    """Save full prompt + agent trajectory for debugging."""
+def log_trace(output_dir: Path, run_name: str, turn: int, prompt: str,
+              trajectory: list[dict], diff: str = "", modified_train_py: str = "",
+              experiment_stdout: str = ""):
+    """Save full rollout: prompt, trajectory, diff, modified code, experiment output."""
     trace_dir = output_dir / f"{run_name}_traces"
     trace_dir.mkdir(parents=True, exist_ok=True)
     trace_path = trace_dir / f"turn_{turn:03d}.json"
@@ -351,6 +319,9 @@ def log_trace(output_dir: Path, run_name: str, turn: int, prompt: str, trajector
         "turn": turn,
         "prompt": prompt,
         "trajectory": trajectory,
+        "diff": diff,
+        "modified_train_py": modified_train_py,
+        "experiment_stdout": experiment_stdout,
     }, ensure_ascii=True, indent=2))
 
 
@@ -364,7 +335,20 @@ def main():
     parser.add_argument("--vllm-base-url", type=str, default=VLLM_BASE_URL)
     parser.add_argument("--run-name", type=str, default="qwen3-14b-baseline")
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--single-turn", action="store_true",
+                        help="No feedback between turns — measures baseline sampling entropy")
+    parser.add_argument("--experiment-host", type=str, default=None,
+                        help="SSH host for experiment GPU (default: localhost)")
+    parser.add_argument("--experiment-gpu", type=str, default="0",
+                        help="CUDA device index on experiment host")
     args = parser.parse_args()
+
+    # Override experiment fleet if --experiment-host is set
+    global EXPERIMENT_FLEET
+    if args.experiment_host:
+        host = args.experiment_host
+        gpu = args.experiment_gpu
+        EXPERIMENT_FLEET = [GPUSlot(host, gpu, f"{host}-gpu{gpu}", "~/autoresearch")]
 
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     output_path = Path(OUTPUT_DIR) / f"{args.run_name}-{int(time.time())}.jsonl"
@@ -376,6 +360,7 @@ def main():
     print(f"Max turns:   {args.max_turns}")
     print(f"Step limit:  {args.step_limit}")
     print(f"Temperature: {args.temperature}")
+    print(f"Single-turn: {args.single_turn}")
     print(f"Fleet:       {[s.name for s in EXPERIMENT_FLEET]}")
     print(f"Output:      {output_path}")
     print()
@@ -398,10 +383,12 @@ def main():
         "max_turns": args.max_turns,
         "step_limit": args.step_limit,
         "temperature": args.temperature,
+        "single_turn": args.single_turn,
         "seed": args.seed,
         "fleet": [s.name for s in EXPERIMENT_FLEET],
         "baseline_val_bpb": BASELINE_VAL_BPB,
-        "method": "multi-turn mini-swe-agent (no weight updates)",
+        "method": "single-turn sampling (no feedback)" if args.single_turn
+                  else "multi-turn ICL (no weight updates)",
     }
     wandb.init(project="autoresearch-baseline", name=args.run_name, config=config)
     log_jsonl(output_path, {"config": config})
@@ -418,8 +405,6 @@ def main():
     turn_results: list[dict] = []
     cache = ExperimentCache(write_path=BASELINE_CACHE)
     print(f"Experiment cache: {len(cache)} entries loaded from disk")
-    best_trajectory_summary: str = ""
-    previous_trajectory_summary: str = ""
     cumulative_crashes = 0
     cumulative_successes = 0
 
@@ -429,11 +414,12 @@ def main():
         print(f"Turn {turn}/{args.max_turns}")
         print(f"{'='*60}")
 
-        # Build instance prompt with structured feedback
+        # Build instance prompt (with feedback for ICL, without for single-turn)
         instance_prompt = build_instance_prompt(baseline, [])
-        feedback_block = format_feedback_prompt(turn_results, best_trajectory_summary, previous_trajectory_summary)
-        if feedback_block:
-            instance_prompt += "\n\n" + feedback_block
+        if not args.single_turn:
+            feedback_block = format_feedback_prompt(turn_results)
+            if feedback_block:
+                instance_prompt += "\n\n" + feedback_block
 
         # Run mini-swe-agent episode (model edits train.py via bash)
         workdir = create_isolated_workdir()
@@ -475,10 +461,7 @@ def main():
             shutil.rmtree(workdir, ignore_errors=True)
 
         agent_time = time.time() - agent_t0
-        previous_trajectory_summary = extract_trajectory_summary(trajectory)
-
-        # Log full trace for debugging (always, regardless of experiment outcome)
-        log_trace(Path(OUTPUT_DIR), args.run_name, turn, instance_prompt, trajectory)
+        experiment_stdout = ""  # populated after dispatch
 
         diff_text = make_diff(baseline, modified)
         n_tool_calls = sum(1 for m in trajectory if m.get("role") == "assistant"
@@ -527,6 +510,8 @@ def main():
                                     "trajectory_len": trajectory_len,
                                     "used_search": used_search,
                                     "agent_time": agent_time})
+            log_trace(Path(OUTPUT_DIR), args.run_name, turn, instance_prompt, trajectory,
+                      diff=diff_text, modified_train_py=modified)
             continue
 
         # Cache: replay cached result if we've seen this exact diff before
@@ -565,11 +550,13 @@ def main():
                                     "trajectory_len": trajectory_len,
                                     "used_search": used_search,
                                     "agent_time": agent_time})
+            log_trace(Path(OUTPUT_DIR), args.run_name, turn, instance_prompt, trajectory,
+                      diff=diff_text, modified_train_py=modified)
             continue
 
         # Dispatch to experiment GPU
         print(f"  Dispatching experiment to {EXPERIMENT_FLEET[0].name}...")
-        metrics, returncode, error_feedback = dispatch_experiment(modified)
+        metrics, returncode, error_feedback, experiment_stdout = dispatch_experiment(modified)
         val_bpb = metrics.get("val_bpb")
         experiment_time = time.time() - t0
 
@@ -611,13 +598,14 @@ def main():
                                     "trajectory_len": trajectory_len,
                                     "used_search": used_search,
                                     "agent_time": agent_time})
+            log_trace(Path(OUTPUT_DIR), args.run_name, turn, instance_prompt, trajectory,
+                      diff=diff_text, modified_train_py=modified, experiment_stdout=experiment_stdout)
             continue
 
         # Compute reward
         reward, status, reward_feedback = compute_reward(val_bpb, best_val_bpb)
         if status == "improvement":
             best_val_bpb = val_bpb
-            best_trajectory_summary = extract_trajectory_summary(trajectory)
 
         memory_gb = metrics.get("peak_vram_mb", 0) / 1024
         depth = metrics.get("depth")
@@ -671,6 +659,8 @@ def main():
             "trajectory_len": trajectory_len, "used_search": used_search,
             "agent_time": agent_time,
         })
+        log_trace(Path(OUTPUT_DIR), args.run_name, turn, instance_prompt, trajectory,
+                  diff=diff_text, modified_train_py=modified, experiment_stdout=experiment_stdout)
 
     # Summary
     print(f"\n{'='*60}")
