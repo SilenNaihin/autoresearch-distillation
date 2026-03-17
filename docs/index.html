@@ -492,10 +492,19 @@
       decay adjustments.
     </p>
     <p>
-      Our SDPO result (&minus;2.7%) nearly matches this despite using a 14B open-source model vs. a
-      frontier model. The dominant insight is the same across both: <strong>throughput over parameters</strong>
-      &mdash; trade model size for more training steps within the fixed budget. Both Claude and Qwen3-14B
-      independently converge on this strategy.
+      A key design difference: Karpathy&rsquo;s setup <strong>accepts successful diffs</strong> into
+      <code>train.py</code>, so each experiment builds on the last improvement &mdash; the file evolves
+      over time. In our setup, <strong>the agent always receives the original unmodified
+      <code>train.py</code></strong>. This is deliberate: SDPO rollouts start from scratch each time
+      (learning lives in the weights, not the file), so the baselines must do the same for a fair
+      comparison. It means every improvement must be independently rediscovered, making our results
+      harder to achieve but cleaner to interpret.
+    </p>
+    <p>
+      Despite this handicap, our SDPO result (&minus;2.7%) nearly matches Claude&rsquo;s (&minus;2.8%)
+      using a 14B open-source model vs. a frontier model. The dominant insight is the same across both:
+      <strong>throughput over parameters</strong> &mdash; trade model size for more training steps within
+      the fixed budget. Both Claude and Qwen3-14B independently converge on this strategy.
     </p>
 
     <div class="table-wrapper">
