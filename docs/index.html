@@ -253,7 +253,7 @@
       Bar widths as % of max improvement (0.028):
       Claude:  0.028/0.028 = 100%
       SDPO:    0.028/0.028 = 100%
-      Single:  0.019/0.028 = 68%
+      Single:  0.024/0.028 = 86%
       ICL:     0.018/0.028 = 64%
     -->
     <div class="chart-container">
@@ -282,18 +282,18 @@
       <div class="bar-row">
         <div class="bar-label">
           Single-turn
-          <small>Qwen3-14B, 50 turns</small>
+          <small>Qwen3-14B, best of 50</small>
         </div>
         <div class="bar-track">
-          <div class="bar-fill single" style="width: 68%;"></div>
+          <div class="bar-fill single" style="width: 86%;"></div>
         </div>
-        <div class="bar-value">&minus;1.8%</div>
+        <div class="bar-value">&minus;2.3%</div>
       </div>
 
       <div class="bar-row">
         <div class="bar-label">
           ICL Baseline
-          <small>Qwen3-14B, 50 turns</small>
+          <small>Qwen3-14B, best of 50</small>
         </div>
         <div class="bar-track">
           <div class="bar-fill icl" style="width: 64%;"></div>
@@ -304,8 +304,7 @@
       <p class="chart-note">
         Claude result from <a href="https://github.com/karpathy/autoresearch/discussions/43">Karpathy's 126-experiment run</a>
         (0.998 &rarr; 0.970). Our baseline differs in absolute terms (1.056) due to platform setup;
-        relative improvements are comparable. Single-turn and ICL results are within the same distribution
-        at 50 turns.
+        relative improvements are comparable.
       </p>
     </div>
   </section>
@@ -330,8 +329,8 @@
     <p>
       Same model, same tools, no weight updates. The model accumulates experiment feedback in its context
       window across 50 sequential turns: top results with full diffs, classified crash reports, and
-      structured history. All learning happens through context conditioning. Achieves
-      <strong>val_bpb&nbsp;=&nbsp;1.038</strong> with 8 improvements over 50 turns via steady hill climbing.
+      structured history. All learning happens through context conditioning. Best result:
+      <strong>val_bpb&nbsp;=&nbsp;1.038</strong> across multiple runs.
     </p>
 
     <h3>Single-turn Baseline <span class="pill pill-single">No Feedback</span></h3>
@@ -339,9 +338,9 @@
       N independent single-shot calls with no history and no feedback. Just &ldquo;here&rsquo;s <code>train.py</code>,
       improve it&rdquo; repeated N times, taking the best result. This measures the entropy of the
       sampling distribution &mdash; what you get from pure random exploration at temperature&nbsp;1.0.
-      At 50 turns, single-turn achieves <strong>val_bpb&nbsp;=&nbsp;1.037</strong> &mdash; within the same
-      distribution as ICL, suggesting the feedback loop adds consistency but not fundamentally better outcomes
-      at this scale.
+      At 50 turns, single-turn achieves <strong>val_bpb&nbsp;=&nbsp;1.032</strong> &mdash; actually
+      beating ICL&rsquo;s best of 1.038, suggesting the feedback loop adds consistency but not
+      fundamentally better outcomes at this scale.
     </p>
   </section>
 
@@ -423,11 +422,11 @@
       The core question: does RL training add value beyond what in-context learning provides?
     </p>
     <p>
-      <strong>Single-turn matches ICL.</strong> At 50 turns, the single-turn baseline (1.037) and
-      ICL baseline (1.038) achieve nearly identical best results. The feedback loop gives ICL more
-      consistent improvements (8 vs 3), but doesn&rsquo;t produce fundamentally better outcomes &mdash;
-      random exploration at temperature 1.0 finds comparably good configurations by chance. At this
-      scale, context conditioning adds reliability, not capability.
+      <strong>Single-turn beats ICL.</strong> The single-turn baseline (1.032) actually outperforms
+      ICL (1.038) through a single lucky hit. The feedback loop gives ICL more consistent
+      improvements, but doesn&rsquo;t produce fundamentally better outcomes &mdash;
+      random exploration at temperature 1.0 finds better configurations by chance. Context conditioning
+      adds reliability, not capability.
     </p>
     <p>
       <strong>SDPO breaks out.</strong> Weight updates encode exploration patterns that persist across
@@ -437,8 +436,8 @@
       the policy is still improving.
     </p>
     <p>
-      The gap between single-turn and ICL measures what context contributes (almost nothing at 50 turns).
-      The gap between ICL and SDPO measures what weights contribute (significant: another 1% improvement).
+      The gap between single-turn and ICL measures what context contributes (nothing &mdash; single-turn
+      actually wins). The gap between both baselines and SDPO measures what weights contribute.
     </p>
   </section>
 
@@ -483,7 +482,7 @@
             <td>Single-turn (ours)</td>
             <td>Qwen3-14B</td>
             <td>50 turns (no feedback)</td>
-            <td>&minus;1.8%</td>
+            <td>&minus;2.3%</td>
           </tr>
           <tr>
             <td>ICL baseline (ours)</td>
