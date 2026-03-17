@@ -228,12 +228,12 @@
         We train <strong>Qwen3-14B</strong> to propose modifications to a GPT pretraining script to reduce
         validation loss using <a href="https://github.com/lasgroup/SDPO">Self-Distillation Policy Optimization (SDPO)</a>.
         Modified training scripts are run on H100 GPUs and natural language describing experimental outcomes 
-        is used as hindsight context for a teacher model which provides reward signal to a student model. On <a href="https://github.com/karpathy/autoresearch">Karpathy's autoresearch</a>
+        is used as hindsight context for a teacher model which provides a reward signal to a student model. On <a href="https://github.com/karpathy/autoresearch">Karpathy's autoresearch</a>
         benchmark, SDPO achieves <strong>val_bpb&nbsp;=&nbsp;1.028</strong> &mdash; a 2.7% improvement over
         the unmodified baseline, comparable to Claude's 2.8% improvement in the original experiments. We compare against
         two baselines &mdash; multi-turn in-context learning and single-turn random exploration &mdash;
-        finding that feedback adds consistency but not better outcomes, while weight updates are what
-        break past the sampling distribution.
+        finding that context conditioning adds consistency without improving outcomes, while
+        weight updates improve the model's capabilities, leading to improvements not produced by the base model.
       </p>
     </div>
   </section>
