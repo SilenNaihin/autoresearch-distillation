@@ -225,14 +225,14 @@
     <h2>Abstract</h2>
     <div class="abstract">
       <p>
-        We train <strong>Qwen3-14B</strong> to optimize a GPT pretraining script through
-        <a href="https://github.com/lasgroup/SDPO">Self-Distillation Policy Optimization (SDPO)</a>,
-        where the model edits code via bash tools, experiments run on H100 GPUs, and scalar rewards
-        flow back into training. On <a href="https://github.com/karpathy/autoresearch">Karpathy's autoresearch</a>
+        We train <strong>Qwen3-14B</strong> to propose modifications to a GPT pretraining script to reduce
+        validation loss using <a href="https://github.com/lasgroup/SDPO">Self-Distillation Policy Optimization (SDPO)</a>.
+        Modified training scripts are run on H100 GPUs and natural language describing experimental outcomes 
+        is used as hindsight context for a teacher model which provides reward signal to a student model. On <a href="https://github.com/karpathy/autoresearch">Karpathy's autoresearch</a>
         benchmark, SDPO achieves <strong>val_bpb&nbsp;=&nbsp;1.028</strong> &mdash; a 2.7% improvement over
-        the unmodified baseline, comparable to Claude's 2.8% in the original experiments. We compare against
-        a multi-turn in-context learning baseline to isolate what weight updates contribute beyond
-        context conditioning.
+        the unmodified baseline, comparable to Claude's 2.8% improvement in the original experiments. 
+        We show this approach outperforms a multi-turn in-context learning baseline to isolate what weight 
+        updates contribute beyond context conditioning.
       </p>
     </div>
   </section>
@@ -317,11 +317,12 @@
     <h3>SDPO <span class="pill pill-rl">RL</span></h3>
     <p>
       The model generates rollouts &mdash; editing <code>train.py</code> via bash tool calls &mdash; and
-      experiments execute on remote H100s. Rewards (how much <code>val_bpb</code> improved) flow back through
-      GRPO updates. The teacher is the model itself: successful rollouts become self-distillation targets,
-      and environment feedback (diffs, metrics, crash info) is injected into the teacher prompt.
-      Weight updates encode exploration patterns that compound across training &mdash; infinite effective
-      memory, unlike context-bounded approaches.
+      experiments execute on remote H100s. A reward signal is provided via hindsight context from a teacher model, 
+      flowing to the model's weights via policy gradient updates. Compared to GRPO, this approach does not
+      need a successful demonstration for an advantage signal. It only needs the correct solution
+      to be more likely under the teacher model compared to the student model for dense supervision towards a correct answer. 
+      Weight updates encode exploration patterns that compound across training &mdash; increasing effective 
+      memory and feedback adherence in comparison to context-bounded approaches (such as ICL and memory systems).
     </p>
 
     <h3>ICL Baseline <span class="pill pill-icl">In-Context</span></h3>
@@ -355,15 +356,50 @@
       (481&rarr;952).
     </p>
 
-    <h3>Best diff (SDPO, val_bpb = 1.028)</h3>
-    <div class="diff-block"><span class="meta">--- a/train.py
-+++ b/train.py
-@@ -429,7 +429,7 @@</span>
- # Model architecture
-<span class="del">-ASPECT_RATIO = 64       # model_dim = depth * ASPECT_RATIO</span>
-<span class="add">+ASPECT_RATIO = 43       # model_dim = depth * ASPECT_RATIO</span></div>
+    <h3>Top discoveries (SDPO, 60 training steps)</h3>
+    <div class="table-wrapper">
+      <table>
+        <thead>
+          <tr><th>#</th><th>Edit</th><th>val_bpb</th><th>Improvement</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>1</td>
+            <td><code>ASPECT_RATIO 64 &rarr; 43</code></td>
+            <td class="best">1.028</td>
+            <td class="best">&minus;2.7%</td>
+          </tr>
+          <tr>
+            <td>2</td>
+            <td><code>ASPECT_RATIO 64 &rarr; 40</code></td>
+            <td>1.029</td>
+            <td>&minus;2.6%</td>
+          </tr>
+          <tr>
+            <td>3</td>
+            <td><code>ASPECT_RATIO 64 &rarr; 48</code></td>
+            <td>1.029</td>
+            <td>&minus;2.6%</td>
+          </tr>
+          <tr>
+            <td>4</td>
+            <td><code>ASPECT_RATIO 64 &rarr; 40</code> + <code>DEPTH 8 &rarr; 12</code></td>
+            <td>1.029</td>
+            <td>&minus;2.6%</td>
+          </tr>
+          <tr>
+            <td>5</td>
+            <td><code>DEPTH 8 &rarr; 6</code></td>
+            <td>1.035</td>
+            <td>&minus;2.0%</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
     <p style="font-size: 0.88em; color: var(--text-secondary);">
-      33M params, 952 training steps, 34.8 GB VRAM. A single-line change that achieves -2.7% improvement.
+      All top edits exploit the same insight: shrink the model to get more training steps within the
+      5-minute budget. At step 50 the model still maintains a ~9% novelty rate, continuing to propose
+      unseen experiments rather than collapsing to a single known-good edit.
     </p>
 
     <h3>Learned intuition through weight updates</h3>
@@ -372,7 +408,7 @@
       and <code>train.py</code>. Yet after training, the model generates chain-of-thought that references
       &ldquo;previous attempts&rdquo; and their outcomes. These aren&rsquo;t memories from context;
       they&rsquo;re <strong>learned intuitions encoded in the weights</strong> through SDPO, surfacing as
-      hallucinated but directionally correct recollections:
+      recollections in chain-of-thought used to guide reasoning:
     </p>
 
     <div class="think-block">
@@ -428,15 +464,18 @@
     <p>
       <strong>SDPO compounds.</strong> Weight updates encode exploration patterns that persist across
       rollouts without consuming context. The model learns which <em>kinds</em> of changes tend to
-      work &mdash; a form of meta-learning that context conditioning can&rsquo;t replicate. SDPO achieves
-      its best result at step 56 of 60, suggesting the policy is still improving.
+      work. For example, early in training the model attempts to increase the model size before
+      finding that this leads to out-of-memory errors. After ~10 steps the model learns to avoid these
+      modifications and explores other ways of improving validation loss (e.g., reducing aspect ratio and batch
+      size).
     </p>
     <p>
       <strong>The single-turn baseline will quantify the gap.</strong> If N=1,000 independent attempts
       (no feedback, no weight updates) matches ICL&rsquo;s best, then the feedback loop isn&rsquo;t
       adding value &mdash; the model is just sampling from its base distribution and getting lucky.
       The gap between single-turn and ICL measures what context contributes;
-      the gap between ICL and SDPO measures what weights contribute.
+      the gap between ICL and SDPO measures what weights contribute. We observe ICL saturating
+      after 30 attempts, suggesting the difference is not simply due to more exploration.
     </p>
   </section>
 
@@ -496,6 +535,23 @@
 
   <hr>
 
+  <!-- Limitations & Future Work -->
+  <section>
+    <h2>Limitations & Future Work</h2>
+    <p>
+      Our current approach depends on the base capabilities of a Qwen3 14B model in generating
+      novel modifications to research code. We expect the performance of this approach to improve
+      with the size of the model and with additional tools (e.g., web search to read research papers). 
+      Another challenge is encouraging the model to combine single edits that reduce validation loss. 
+      Finally, although we believe references to previous experiments in chain-of-thought
+      serve as a means of improving reasoning quality, we notice the model tends to conflate
+      feedback from different rollouts. We suspect this is due to using a batch size greater
+      than one with the same prompt and varying teacher hindsight context.
+    </p>
+  </section>
+
+  <hr>
+
   <!-- Built on -->
   <section>
     <h2>Built On</h2>
@@ -508,7 +564,7 @@
     <p>
       <strong><a href="https://github.com/lasgroup/SDPO">SDPO</a></strong> (Qu et al., 2025) &mdash;
       Self-Distillation Policy Optimization. Uses the model&rsquo;s own successful rollouts as teacher
-      targets, avoiding the need for a separate reward model. We extend it with agentic tool use and
+      hindsight context, avoiding the need for a separate reward model. We extend it with agentic tool use and
       live environment rewards from real GPU experiments.
     </p>
   </section>
