@@ -231,8 +231,9 @@
         flow back into training. On <a href="https://github.com/karpathy/autoresearch">Karpathy's autoresearch</a>
         benchmark, SDPO achieves <strong>val_bpb&nbsp;=&nbsp;1.028</strong> &mdash; a 2.7% improvement over
         the unmodified baseline, comparable to Claude's 2.8% in the original experiments. We compare against
-        a multi-turn in-context learning baseline to isolate what weight updates contribute beyond
-        context conditioning.
+        two baselines &mdash; multi-turn in-context learning and single-turn random exploration &mdash;
+        finding that feedback adds consistency but not better outcomes, while weight updates are what
+        break past the sampling distribution.
       </p>
     </div>
   </section>
@@ -250,10 +251,10 @@
     <!--
       Scale: baseline=1.056, best=1.028 → max delta=0.028
       Bar widths as % of max improvement (0.028):
-      Claude:  0.028/0.028 = 100% (comparable, different absolute baseline)
+      Claude:  0.028/0.028 = 100%
       SDPO:    0.028/0.028 = 100%
+      Single:  0.019/0.028 = 68%
       ICL:     0.018/0.028 = 64%
-      Single:  TBD
     -->
     <div class="chart-container">
       <div class="bar-row">
@@ -280,30 +281,31 @@
 
       <div class="bar-row">
         <div class="bar-label">
-          ICL Baseline
-          <small>Qwen3-14B, ours</small>
+          Single-turn
+          <small>Qwen3-14B, 50 turns</small>
         </div>
         <div class="bar-track">
-          <div class="bar-fill icl" style="width: 61%;"></div>
+          <div class="bar-fill single" style="width: 68%;"></div>
         </div>
-        <div class="bar-value">&minus;1.7%</div>
+        <div class="bar-value">&minus;1.8%</div>
       </div>
 
       <div class="bar-row">
         <div class="bar-label">
-          Single-turn
-          <small>Qwen3-14B, planned</small>
+          ICL Baseline
+          <small>Qwen3-14B, 50 turns</small>
         </div>
         <div class="bar-track">
-          <div class="bar-fill single" style="width: 0%; min-width: 4px; opacity: 0.4;"></div>
+          <div class="bar-fill icl" style="width: 64%;"></div>
         </div>
-        <div class="bar-value" style="color: var(--muted);">TBD</div>
+        <div class="bar-value">&minus;1.7%</div>
       </div>
 
       <p class="chart-note">
         Claude result from <a href="https://github.com/karpathy/autoresearch/discussions/43">Karpathy's 126-experiment run</a>
         (0.998 &rarr; 0.970). Our baseline differs in absolute terms (1.056) due to platform setup;
-        relative improvements are comparable.
+        relative improvements are comparable. Single-turn and ICL results are within the same distribution
+        at 50 turns.
       </p>
     </div>
   </section>
@@ -327,18 +329,19 @@
     <h3>ICL Baseline <span class="pill pill-icl">In-Context</span></h3>
     <p>
       Same model, same tools, no weight updates. The model accumulates experiment feedback in its context
-      window across 30 sequential turns: top results with full diffs, classified crash reports, and
-      structured history. All learning happens through context conditioning. This tests whether in-context
-      learning &mdash; given enough history &mdash; can match what SDPO encodes in weights.
+      window across 50 sequential turns: top results with full diffs, classified crash reports, and
+      structured history. All learning happens through context conditioning. Achieves
+      <strong>val_bpb&nbsp;=&nbsp;1.038</strong> with 8 improvements over 50 turns via steady hill climbing.
     </p>
 
-    <h3>Single-turn Baseline <span class="pill pill-single">Planned</span></h3>
+    <h3>Single-turn Baseline <span class="pill pill-single">No Feedback</span></h3>
     <p>
       N independent single-shot calls with no history and no feedback. Just &ldquo;here&rsquo;s <code>train.py</code>,
-      improve it&rdquo; repeated 1,000 times, taking the best result. This measures the entropy of the
+      improve it&rdquo; repeated N times, taking the best result. This measures the entropy of the
       sampling distribution &mdash; what you get from pure random exploration at temperature&nbsp;1.0.
-      If single-turn at 1,000 attempts matches ICL at 30 turns, then feedback isn&rsquo;t adding value
-      and the model is just rolling dice. The gap between them is the signal that in-context learning contributes.
+      At 50 turns, single-turn achieves <strong>val_bpb&nbsp;=&nbsp;1.037</strong> &mdash; within the same
+      distribution as ICL, suggesting the feedback loop adds consistency but not fundamentally better outcomes
+      at this scale.
     </p>
   </section>
 
@@ -420,23 +423,22 @@
       The core question: does RL training add value beyond what in-context learning provides?
     </p>
     <p>
-      <strong>ICL saturates.</strong> The multi-turn baseline plateaus after ~15 turns. The model exhausts
-      its exploration space within the same narrow set of hyperparameter tweaks (depth, aspect ratio,
-      learning rates, batch size) and rarely discovers architectural innovations. Feedback accumulates in
-      a finite context window, but more history doesn&rsquo;t translate to better proposals.
+      <strong>Single-turn matches ICL.</strong> At 50 turns, the single-turn baseline (1.037) and
+      ICL baseline (1.038) achieve nearly identical best results. The feedback loop gives ICL more
+      consistent improvements (8 vs 3), but doesn&rsquo;t produce fundamentally better outcomes &mdash;
+      random exploration at temperature 1.0 finds comparably good configurations by chance. At this
+      scale, context conditioning adds reliability, not capability.
     </p>
     <p>
-      <strong>SDPO compounds.</strong> Weight updates encode exploration patterns that persist across
+      <strong>SDPO breaks out.</strong> Weight updates encode exploration patterns that persist across
       rollouts without consuming context. The model learns which <em>kinds</em> of changes tend to
       work &mdash; a form of meta-learning that context conditioning can&rsquo;t replicate. SDPO achieves
-      its best result at step 56 of 60, suggesting the policy is still improving.
+      1.028, a clear separation from both baselines, with its best result at step 56 of 60 suggesting
+      the policy is still improving.
     </p>
     <p>
-      <strong>The single-turn baseline will quantify the gap.</strong> If N=1,000 independent attempts
-      (no feedback, no weight updates) matches ICL&rsquo;s best, then the feedback loop isn&rsquo;t
-      adding value &mdash; the model is just sampling from its base distribution and getting lucky.
-      The gap between single-turn and ICL measures what context contributes;
-      the gap between ICL and SDPO measures what weights contribute.
+      The gap between single-turn and ICL measures what context contributes (almost nothing at 50 turns).
+      The gap between ICL and SDPO measures what weights contribute (significant: another 1% improvement).
     </p>
   </section>
 
@@ -478,9 +480,15 @@
             <td class="best">&minus;2.7%</td>
           </tr>
           <tr>
+            <td>Single-turn (ours)</td>
+            <td>Qwen3-14B</td>
+            <td>50 turns (no feedback)</td>
+            <td>&minus;1.8%</td>
+          </tr>
+          <tr>
             <td>ICL baseline (ours)</td>
             <td>Qwen3-14B</td>
-            <td>30 turns</td>
+            <td>50 turns (with feedback)</td>
             <td>&minus;1.7%</td>
           </tr>
         </tbody>
