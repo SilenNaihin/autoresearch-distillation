@@ -89,6 +89,7 @@ actor_rollout_ref:
       format: hermes
       interaction_config_path: null
     agent:
+      num_workers: 1
       default_agent_loop: autoresearch_agent
       agent_loop_config_path: ${vars.dir}/configs/agent_loops.yaml
 
