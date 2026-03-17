@@ -103,7 +103,8 @@ def validate_config(
             )
             minimal_bsz = megatron_dp * config.actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu
         else:
-            minimal_bsz = n_gpus
+            sp_size = getattr(config.actor_rollout_ref.actor, "ulysses_sequence_parallel_size", 1)
+            minimal_bsz = n_gpus // sp_size
 
         # 1. Check total batch size for data correctness
         real_train_batch_size = config.data.train_batch_size * config.actor_rollout_ref.rollout.n
