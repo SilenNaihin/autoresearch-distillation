@@ -27,7 +27,7 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "WARN"))
 
-CACHE_DIR = Path("outputs/cache")
+CACHE_DIR = Path("/data/cache")
 BASELINE_CACHE = CACHE_DIR / "baseline.json"
 SDPO_CACHE = CACHE_DIR / "sdpo.json"
 

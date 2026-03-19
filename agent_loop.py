@@ -196,6 +196,13 @@ class AutoresearchAgentLoop(ToolAgentLoop):
             env_metrics["env_novel"] = self._is_novel
             output.extra_fields["reward_extra_info"] = {"feedback": feedback, "parent_id": int(self._parent_id), **env_metrics}
 
+            # Store modified raw_prompt under a separate key so the teacher prompt
+            # uses the same (buffer-selected) train.py as the student rollout.
+            # We can't overwrite "raw_prompt" because _agent_loop_postprocess sets it
+            # from the caller's kwargs (which has the original, unmodified prompt).
+            if "raw_prompt" in kwargs:
+                output.extra_fields["agent_raw_prompt"] = kwargs["raw_prompt"]
+
             return output
         finally:
             # Clean up workdir
