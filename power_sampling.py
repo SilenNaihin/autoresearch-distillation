@@ -5,17 +5,22 @@ Based on "Reasoning with Sampling: Your Base Model is Smarter Than You Think"
 (Karan & Du, 2025). https://arxiv.org/abs/2510.14901
 
 Uses vLLM's OpenAI-compatible chat completions API with logprobs.
-With temperature=1 proposal, the Metropolis-Hastings acceptance ratio simplifies to:
-    log_ratio = (α - 1) * [Σ log_p(new_suffix) - Σ log_p(old_suffix)]
+vLLM always returns base model logprobs log_p regardless of sampling temperature,
+so we can use low-temperature proposals (τ=1/α) while still computing the full
+MH acceptance ratio by approximating log_q from top-k base logprobs:
 
-Algorithm:
+    log_ratio = α·[Σlog_p(new) - Σlog_p(old)] + [Σlog_q(old) - Σlog_q(new)]
+
+where log_q is approximated via: log_q(token) ≈ log_p(token)/τ - logsumexp(top_k_log_p/τ)
+
+Algorithm (constrained MCMC with biased resampling):
     1. Generate complete initial sequence (with thinking if available)
-    2. Find the </think> boundary — MCMC only resamples tokens AFTER it
-    3. For each of block_num blocks:
-       a. Pick a random resample position in the post-think region
+    2. For each of block_num blocks:
+       a. Pick a random resample position biased toward reasoning conclusion + output
        b. For each of mcmc_steps MH steps:
-          - Resample everything from that position onward
-          - Accept/reject via Metropolis-Hastings ratio
+          - Resample everything from that position onward (at temperature τ=1/α)
+          - If validator provided, reject structurally invalid proposals
+          - Accept/reject valid proposals via full MH ratio
     Total MCMC API calls = block_num × mcmc_steps
 
 Requirements:
@@ -28,9 +33,14 @@ from __future__ import annotations
 import math
 import random
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from openai import OpenAI
+
+# Number of top logprobs to request for log_q approximation.
+# At τ=0.25, top-20 captures >99.9% of the probability mass.
+_TOP_K = 20
 
 
 @dataclass
@@ -39,6 +49,7 @@ class PowerSampleResult:
     tokens: list[str] = field(default_factory=list)
     logprobs: list[float] = field(default_factory=list)
     acceptance_rate: float = 0.0
+    validity_rate: float = 0.0
     total_tokens_generated: int = 0
     wall_time: float = 0.0
     think_end_idx: int = 0
@@ -52,10 +63,11 @@ def _chat_generate(
     temperature: float = 1.0,
     stop: list[str] | None = None,
     continue_final: bool = False,
-) -> tuple[list[str], list[float]]:
+) -> tuple[list[str], list[float], list[list[float]]]:
     """Generate via chat completions with logprobs.
 
-    Returns (token_strings, base_model_logprobs).
+    Returns (token_strings, base_model_logprobs, top_k_base_logprobs_per_position).
+    vLLM always returns base model logprobs regardless of sampling temperature.
     """
     kwargs = dict(
         model=model,
@@ -63,7 +75,7 @@ def _chat_generate(
         max_tokens=max_tokens,
         temperature=max(temperature, 0.01),
         logprobs=True,
-        top_logprobs=1,
+        top_logprobs=_TOP_K,
     )
     if stop:
         kwargs["stop"] = stop
@@ -79,11 +91,33 @@ def _chat_generate(
     choice = response.choices[0]
 
     if choice.logprobs is None or not choice.logprobs.content:
-        return [], []
+        return [], [], []
 
     tokens = [item.token for item in choice.logprobs.content]
     lps = [item.logprob for item in choice.logprobs.content]
-    return tokens, lps
+    top_lps = [
+        [t.logprob for t in item.top_logprobs]
+        for item in choice.logprobs.content
+    ]
+    return tokens, lps, top_lps
+
+
+def _approx_log_q(log_p_token: float, top_base_lps: list[float], temperature: float) -> float:
+    """Approximate log_q(token) from top-k base model logprobs.
+
+    log_q(token) = log_p(token)/τ - logsumexp(top_k_log_p / τ)
+
+    At low τ (e.g. 0.25), the softmax is very peaked so top-20
+    captures nearly all the probability mass, making this tight.
+    """
+    scaled = [lp / temperature for lp in top_base_lps]
+    # Include the sampled token if not already in top-k
+    scaled_token = log_p_token / temperature
+    if scaled_token not in scaled:
+        scaled.append(scaled_token)
+    max_s = max(scaled)
+    log_Z = max_s + math.log(sum(math.exp(s - max_s) for s in scaled))
+    return scaled_token - log_Z
 
 
 def _build_messages(system_prompt: str, user_prompt: str, assistant_prefix: str = ""):
@@ -129,7 +163,7 @@ def best_of_n(
     messages = _build_messages(system_prompt, user_prompt)
 
     for _ in range(n):
-        tokens, logprobs = _chat_generate(
+        tokens, logprobs, _top_lps = _chat_generate(
             client, model, messages, max_tokens, temperature, stop
         )
         total_gen += len(tokens)
@@ -162,19 +196,20 @@ def power_sample(
     max_tokens: int = 32768,
     block_num: int = 16,
     mcmc_steps: int = 10,
-    temperature: float = 1.0,
+    temperature: float | None = None,
     stop: list[str] | None = None,
+    validator: Callable[[str], bool] | None = None,
 ) -> PowerSampleResult:
-    """Block-wise MCMC power sampling from p^α (Algorithm 1).
+    """Block-wise constrained MCMC power sampling from p^α.
 
     1. Generate a complete initial sequence with the full max_tokens budget.
-       If the model uses <think>...</think>, the thinking block is preserved
-       and MCMC only resamples tokens AFTER </think>.
     2. Refine via block_num rounds of MCMC, each with mcmc_steps MH proposals.
-       Each block picks a random resample position in the post-think region.
+       Resample positions are biased toward the last 30% of the think block
+       onward. Proposals are generated at temperature τ=1/α (paper's optimal).
+       Proposals that fail structural validation are rejected before MH.
 
-    With temperature=1 proposal, the MH acceptance ratio simplifies to:
-        log_ratio = (α - 1) * [Σ log_p(new) - Σ log_p(old)]
+    Full MH acceptance ratio using approximate log_q:
+        log_ratio = α·[Σlog_p(new) - Σlog_p(old)] + [Σlog_q(old) - Σlog_q(new)]
 
     Args:
         client: OpenAI-compatible client pointing at vLLM.
@@ -185,28 +220,24 @@ def power_sample(
         max_tokens: Max tokens per generation (full context budget).
         block_num: Number of MCMC refinement rounds. Paper uses 16.
         mcmc_steps: MH steps per round. Paper uses 10.
-        temperature: Proposal temperature. 1.0 gives exact MH ratio.
+        temperature: Proposal temperature. Defaults to 1/α (paper's optimal).
         stop: Stop sequences.
+        validator: Optional callable(text) -> bool. Rejects structurally
+            invalid proposals before MH ratio (constrained MCMC).
     """
-    if temperature != 1.0:
-        import warnings
-        warnings.warn(
-            f"temperature={temperature} but MH ratio assumes temperature=1.0. "
-            f"The paper uses temp=1/α={1/alpha:.2f} with the full 4-term MH ratio "
-            f"(requires temperature-scaled logprobs, not available via vLLM API). "
-            f"With temp≠1, proposals may be better but acceptance ratio is approximate.",
-            stacklevel=2,
-        )
+    if temperature is None:
+        temperature = 1.0 / alpha
 
     t0 = time.time()
 
     total_generated = 0
     total_accepted = 0
     total_proposed = 0
+    total_invalid = 0
 
     # --- Step 1: Generate complete initial sequence (with thinking) ---
     msgs = _build_messages(system_prompt, user_prompt)
-    suffix_tokens, suffix_logprobs = _chat_generate(
+    suffix_tokens, suffix_logprobs, suffix_top_lps = _chat_generate(
         client, model, msgs, max_tokens, temperature, stop,
     )
     total_generated += len(suffix_tokens)
@@ -217,22 +248,21 @@ def power_sample(
     seq_len = len(suffix_tokens)
 
     # --- Find </think> boundary ---
-    # MCMC only resamples tokens after this index, preserving the thinking block.
     think_end = _find_think_end(suffix_tokens)
-    resample_start = think_end  # first token eligible for resampling
 
-    # --- Step 2: Block-wise MCMC refinement (post-think only) ---
+    # Biased resampling: start from last 30% of think block onward.
+    resample_start = max(0, int(think_end * 0.7))
+
+    # --- Step 2: Block-wise constrained MCMC refinement ---
     for block_idx in range(block_num):
-        # Need at least 1 token after think block to resample
         if seq_len <= resample_start:
             break
 
-        # Pick a random resample position AFTER the thinking block
+        # Pick a random resample position (biased toward conclusion + output)
         idx = random.randint(resample_start, seq_len - 1)
         remaining = seq_len - idx
 
         for step in range(mcmc_steps):
-            # Build prefix for proposal (always includes full <think>...</think>)
             prop_prefix = "".join(suffix_tokens[:idx])
             if prop_prefix:
                 prop_msgs = _build_messages(system_prompt, user_prompt, prop_prefix)
@@ -242,12 +272,12 @@ def power_sample(
                 prop_cont = False
 
             try:
-                prop_tokens, prop_logprobs = _chat_generate(
+                prop_tokens, prop_logprobs, prop_top_lps = _chat_generate(
                     client, model, prop_msgs, remaining, temperature, stop,
                     continue_final=prop_cont,
                 )
-            except Exception:
-                # Chat template may reject certain prefixes. Skip this proposal.
+            except Exception as exc:
+                print(f"    MCMC block {block_idx} step {step}: proposal failed: {exc}")
                 continue
             total_generated += len(prop_tokens)
             total_proposed += 1
@@ -258,14 +288,30 @@ def power_sample(
             # Compare over overlapping length
             cmp_len = min(len(prop_tokens), remaining)
 
+            # Structural validation (constrained MCMC)
+            if validator is not None:
+                proposed_text = "".join(suffix_tokens[:idx]) + "".join(prop_tokens[:cmp_len])
+                if not validator(proposed_text):
+                    total_invalid += 1
+                    continue
+
             old_lps = suffix_logprobs[idx : idx + cmp_len]
             new_lps = prop_logprobs[:cmp_len]
 
-            old_sum = sum(old_lps)
-            new_sum = sum(new_lps)
+            # Full 4-term MH ratio with approximate log_q
+            old_sum_p = sum(old_lps)
+            new_sum_p = sum(new_lps)
 
-            # MH ratio (temp=1 proposal simplification)
-            log_ratio = (alpha - 1.0) * (new_sum - old_sum)
+            old_sum_q = sum(
+                _approx_log_q(old_lps[i], suffix_top_lps[idx + i], temperature)
+                for i in range(cmp_len)
+            )
+            new_sum_q = sum(
+                _approx_log_q(new_lps[i], prop_top_lps[i], temperature)
+                for i in range(cmp_len)
+            )
+
+            log_ratio = alpha * (new_sum_p - old_sum_p) + (old_sum_q - new_sum_q)
 
             u = random.random()
             if u == 0:
@@ -273,11 +319,16 @@ def power_sample(
             if math.log(u) < log_ratio:
                 suffix_tokens = suffix_tokens[:idx] + list(prop_tokens[:cmp_len])
                 suffix_logprobs = suffix_logprobs[:idx] + list(new_lps)
+                suffix_top_lps = suffix_top_lps[:idx] + list(prop_top_lps[:cmp_len])
                 seq_len = len(suffix_tokens)
                 remaining = seq_len - idx
                 total_accepted += 1
+                # Update think_end since sequence changed
+                think_end = _find_think_end(suffix_tokens)
 
-    acceptance_rate = total_accepted / max(total_proposed, 1)
+    total_valid = total_proposed - total_invalid
+    acceptance_rate = total_accepted / max(total_valid, 1)
+    validity_rate = total_valid / max(total_proposed, 1)
     output_text = "".join(suffix_tokens)
 
     return PowerSampleResult(
@@ -285,6 +336,7 @@ def power_sample(
         tokens=suffix_tokens,
         logprobs=suffix_logprobs,
         acceptance_rate=acceptance_rate,
+        validity_rate=validity_rate,
         total_tokens_generated=total_generated,
         wall_time=time.time() - t0,
         think_end_idx=think_end,

@@ -82,7 +82,7 @@ the levers. Think step-by-step about what changes could lower val_bpb.
 # Inference stays on A100 (a100-backup-1) via remote vLLM.
 EXPERIMENT_FLEET = [GPUSlot("localhost", "0", "box2-gpu0", "~/autoresearch")]
 
-MODEL = "Qwen/Qwen3-14B"
+MODEL = "Qwen/Qwen3-14B-SDPO"
 VLLM_BASE_URL = "http://20.125.45.203:8000/v1"
 OUTPUT_DIR = "outputs/baseline"
 
@@ -397,6 +397,11 @@ def main():
                         help="CUDA device index on experiment host")
     parser.add_argument("--cache-sync-host", type=str, default=None,
                         help="SSH host to sync shared cache to/from (e.g. 74.179.57.153)")
+    parser.add_argument("--verl-compat", action="store_true",
+                        help="Treat no-tool-call responses as submission (for VERL-trained models)")
+    parser.add_argument("--provider", type=str, default="vllm",
+                        choices=["vllm", "bedrock"],
+                        help="LLM provider: vllm (local/remote vLLM) or bedrock (AWS)")
     args = parser.parse_args()
 
     # Override experiment fleet if --experiment-host is set
@@ -421,17 +426,26 @@ def main():
     print(f"Output:      {output_path}")
     print()
 
-    # Create mini-swe-agent model pointing at local vLLM
+    # Create mini-swe-agent model
     from minisweagent.models.litellm_model import LitellmModel
-    model = LitellmModel(
-        model_name=f"openai/{args.model}",
-        model_kwargs={
-            "api_base": args.vllm_base_url,
-            "api_key": "dummy",
-            "temperature": args.temperature,
-        },
-        cost_tracking="ignore_errors",
-    )
+    if args.provider == "bedrock":
+        model = LitellmModel(
+            model_name=f"bedrock/{args.model}",
+            model_kwargs={
+                "temperature": args.temperature,
+            },
+            cost_tracking="ignore_errors",
+        )
+    else:
+        model = LitellmModel(
+            model_name=f"openai/{args.model}",
+            model_kwargs={
+                "api_base": args.vllm_base_url,
+                "api_key": "dummy",
+                "temperature": args.temperature,
+            },
+            cost_tracking="ignore_errors",
+        )
 
     # Init wandb
     config = {
@@ -494,6 +508,7 @@ def main():
                 system_prompt=BASELINE_SYSTEM_PROMPT,
                 instance_prompt=instance_prompt,
                 step_limit=args.step_limit,
+                verl_compat=args.verl_compat,
             )
         except Exception as e:
             import traceback

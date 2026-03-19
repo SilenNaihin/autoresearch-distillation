@@ -36,7 +36,8 @@ def create_isolated_workdir(autoresearch_dir: str = "autoresearch") -> str:
     Returns the temp dir path.
     """
     src = os.path.abspath(autoresearch_dir)
-    tmpdir = tempfile.mkdtemp(prefix="autoresearch_workdir_", dir="/data/tmp")
+    tmp_base = "/data/tmp" if os.path.isdir("/data/tmp") else None
+    tmpdir = tempfile.mkdtemp(prefix="autoresearch_workdir_", dir=tmp_base)
     shutil.copytree(src, tmpdir, dirs_exist_ok=True,
                     ignore=shutil.ignore_patterns("__pycache__", ".git", "*.pyc", ".venv"))
     # Copy search.py helper if it exists
@@ -50,12 +51,52 @@ def create_isolated_workdir(autoresearch_dir: str = "autoresearch") -> str:
 # Mini-swe-agent episode runner (for loop_baseline.py data collection)
 # ---------------------------------------------------------------------------
 
+def _patch_model_for_verl_compat(model):
+    """Patch a LitellmModel so a no-tool-call response is treated as submission
+    once the model has already made at least one tool call.
+
+    VERL's ToolAgentLoop terminates when the model generates no tool calls.
+    Mini-swe-agent raises FormatError instead, trapping the model in a retry loop.
+    This patch makes mini-swe-agent match VERL's protocol, but only AFTER the
+    model has made at least one tool call (to avoid premature exit when the model
+    outputs analysis text before its first edit).
+    """
+    from minisweagent.exceptions import Submitted
+
+    original_parse = model._parse_actions
+    _state = {"has_called_tool": False}
+
+    def _parse_actions_verl_compat(response):
+        tool_calls = response.choices[0].message.tool_calls or []
+        if tool_calls:
+            _state["has_called_tool"] = True
+            return original_parse(response)
+        # No tool calls: if model already made edits, treat as done
+        if _state["has_called_tool"]:
+            content = response.choices[0].message.content or ""
+            raise Submitted({
+                "role": "exit",
+                "content": content,
+                "extra": {"exit_status": "Submitted", "submission": content},
+            })
+        # First response with no tool calls — let mini-swe-agent's
+        # FormatError nudge the model to use the bash tool
+        return original_parse(response)
+
+    def _reset():
+        _state["has_called_tool"] = False
+
+    model._parse_actions = _parse_actions_verl_compat
+    model._verl_compat_reset = _reset
+
+
 def run_agent_episode(
     workdir: str,
     model,
     system_prompt: str,
     instance_prompt: str,
     step_limit: int = 20,
+    verl_compat: bool = False,
 ) -> tuple[str, list[dict]]:
     """Run a mini-swe-agent editing session in the given workdir.
 
@@ -65,12 +106,20 @@ def run_agent_episode(
         system_prompt: System prompt template
         instance_prompt: Task prompt with train.py content + history
         step_limit: Max agent turns before forced termination
+        verl_compat: If True, treat no-tool-call responses as submission
+                     (matches VERL ToolAgentLoop termination protocol)
 
     Returns:
         (modified_train_py, trajectory) where trajectory is agent.messages
     """
     from minisweagent.agents.default import DefaultAgent
     from minisweagent.environments.local import LocalEnvironment
+
+    if verl_compat:
+        # Patch once, reset state each episode
+        if not hasattr(model, '_verl_compat_reset'):
+            _patch_model_for_verl_compat(model)
+        model._verl_compat_reset()
 
     env = LocalEnvironment(
         cwd=workdir,

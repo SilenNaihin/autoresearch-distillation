@@ -67,9 +67,19 @@ DEVICE_BATCH_SIZE to compensate. Check that your changes fit in ~85 GB.
 - TOTAL_BATCH_SIZE must be divisible by (DEVICE_BATCH_SIZE * sequence_length). \
 Violating this triggers an assertion error.
 
+## CRITICAL: sed commands apply to the ORIGINAL train.py
+Your sed commands are ALWAYS applied to the ORIGINAL train.py shown in the prompt. \
+Each turn starts fresh from the original — changes from previous turns are NOT cumulative. \
+Always target values EXACTLY as they appear in the original code above, not values from \
+previous experiments. For example, if the original has DEPTH = 8, write 's/DEPTH = 8/DEPTH = 12/' \
+even if a previous turn already tried DEPTH = 12.
+
 ## Output format
-Think step-by-step about what changes could lower val_bpb.
-Then output your changes as sed commands, one per line.
+You MUST always think carefully before acting. Use your <think> block to reason step-by-step \
+about what changes could lower val_bpb, analyze previous results, and plan your approach. \
+Never skip thinking — even if the next step seems obvious from the feedback.
+
+After thinking, output your changes as sed commands, one per line.
 Each sed command must start with "sed -i" and edit train.py.
 
 Example output:
@@ -80,9 +90,30 @@ sed -i 's/learning_rate = 0.001/learning_rate = 0.0005/' train.py\
 """
 
 
+def make_structure_validator(baseline_py: str):
+    """Create a validator for constrained MCMC.
+
+    Rejects proposals that break structural requirements:
+    1. Must contain </think> (thinking block must close)
+    2. Must have sed -i commands after </think>
+    3. At least one sed command's pattern must match the baseline
+    """
+    def validator(text: str) -> bool:
+        think_end = text.find("</think>")
+        if think_end < 0:
+            return False
+        post_think = text[think_end + len("</think>"):]
+        commands = parse_sed_commands(post_think)
+        if not commands:
+            return False
+        valid = validate_sed_commands(baseline_py, commands)
+        return len(valid) > 0
+    return validator
+
+
 def build_power_prompt(train_py: str, feedback_block: str) -> str:
     """Build the user prompt for power sampling (single-shot)."""
-    parts = ["## Current train.py\n```python\n" + train_py + "\n```"]
+    parts = ["/think", "## Current train.py\n```python\n" + train_py + "\n```"]
 
     if feedback_block:
         parts.append(feedback_block)
@@ -235,8 +266,8 @@ def main():
                         help="Number of MCMC blocks")
     parser.add_argument("--mcmc-steps", type=int, default=10,
                         help="MCMC refinement steps per block")
-    parser.add_argument("--temperature", type=float, default=1.0,
-                        help="Proposal temperature (1.0 for exact MH ratio)")
+    parser.add_argument("--temperature", type=float, default=None,
+                        help="Proposal temperature (default: 1/α, paper's optimal)")
     parser.add_argument("--max-tokens", type=int, default=32768,
                         help="Max response tokens (match 64k context window, model EOS's naturally)")
     # Best-of-N params
@@ -249,6 +280,7 @@ def main():
     output_path = Path(OUTPUT_DIR) / f"{args.run_name}-{int(time.time())}.jsonl"
 
     baseline = Path("autoresearch/train.py").read_text()
+    structure_validator = make_structure_validator(baseline)
 
     from openai import OpenAI
     client = OpenAI(base_url=args.vllm_base_url, api_key="dummy")
@@ -260,7 +292,8 @@ def main():
         print(f"  alpha:       {args.alpha}")
         print(f"  block_num:   {args.block_num}")
         print(f"  mcmc_steps:  {args.mcmc_steps}")
-        print(f"  temperature: {args.temperature}")
+        effective_temp = args.temperature if args.temperature is not None else 1.0 / args.alpha
+        print(f"  temperature: {effective_temp} ({'1/α' if args.temperature is None else 'custom'})")
     else:
         print(f"  n:           {args.n}")
     print(f"Max turns:   {args.max_turns}")
@@ -298,8 +331,7 @@ def main():
         print(f"{'='*60}")
 
         # Build prompt
-        feedback_block = format_feedback_prompt(
-            turn_results, best_trajectory_summary)
+        feedback_block = format_feedback_prompt(turn_results)
         user_prompt = build_power_prompt(baseline, feedback_block)
 
         # Generate with power sampling or best-of-n
@@ -315,6 +347,7 @@ def main():
                 block_num=args.block_num,
                 mcmc_steps=args.mcmc_steps,
                 temperature=args.temperature,
+                validator=structure_validator,
             )
         else:
             result = best_of_n(
@@ -332,7 +365,8 @@ def main():
         print(f"  Generation: {len(result.tokens)} tokens "
               f"(think={result.think_end_idx}, response={post_think}), "
               f"{result.total_tokens_generated} total generated, "
-              f"accept={result.acceptance_rate:.2f}, {gen_time:.1f}s")
+              f"accept={result.acceptance_rate:.2f}, "
+              f"valid={result.validity_rate:.2f}, {gen_time:.1f}s")
 
         if not result.text.strip():
             print("  Status: empty_generation")
@@ -405,7 +439,7 @@ def main():
 
         # Dispatch experiment
         print(f"  Dispatching experiment to {EXPERIMENT_FLEET[0].name}...")
-        metrics, returncode, error_feedback = dispatch_experiment(modified)
+        metrics, returncode, error_feedback, _raw = dispatch_experiment(modified)
         val_bpb = metrics.get("val_bpb")
         experiment_time = time.time() - t0
 
@@ -420,7 +454,8 @@ def main():
             wandb.log({"turn": turn, "status": status, "reward": 0.0,
                         "experiment_time": experiment_time,
                         "gen_time": gen_time,
-                        "acceptance_rate": result.acceptance_rate})
+                        "acceptance_rate": result.acceptance_rate,
+                        "validity_rate": result.validity_rate})
             log_jsonl(output_path, {
                 "turn": turn, "status": status, "diff": diff_text,
                 "feedback": error_feedback, "experiment_time": experiment_time,
@@ -455,6 +490,7 @@ def main():
             "experiment_time": experiment_time, "status": status,
             "gen_time": gen_time,
             "acceptance_rate": result.acceptance_rate,
+            "validity_rate": result.validity_rate,
             "total_tokens_generated": result.total_tokens_generated,
             **{f"env/{k}": v for k, v in metrics.items()},
         })
@@ -465,6 +501,7 @@ def main():
             "metrics": metrics, "gen_time": gen_time,
             "sed_commands": sed_commands,
             "acceptance_rate": result.acceptance_rate,
+            "validity_rate": result.validity_rate,
             "total_tokens_generated": result.total_tokens_generated,
         })
 
