@@ -241,6 +241,7 @@ def power_sample(
         client, model, msgs, max_tokens, temperature, stop,
     )
     total_generated += len(suffix_tokens)
+    print(f"    Initial generation: {len(suffix_tokens)} tokens in {time.time() - t0:.1f}s", flush=True)
 
     if not suffix_tokens:
         return PowerSampleResult(text="", wall_time=time.time() - t0)
@@ -252,6 +253,7 @@ def power_sample(
 
     # Biased resampling: start from last 30% of think block onward.
     resample_start = max(0, int(think_end * 0.7))
+    print(f"    think_end={think_end}, resample_start={resample_start}, seq_len={seq_len}", flush=True)
 
     # --- Step 2: Block-wise constrained MCMC refinement ---
     for block_idx in range(block_num):
@@ -262,6 +264,7 @@ def power_sample(
         idx = random.randint(resample_start, seq_len - 1)
         remaining = seq_len - idx
 
+        block_t0 = time.time()
         for step in range(mcmc_steps):
             prop_prefix = "".join(suffix_tokens[:idx])
             if prop_prefix:
@@ -325,6 +328,8 @@ def power_sample(
                 total_accepted += 1
                 # Update think_end since sequence changed
                 think_end = _find_think_end(suffix_tokens)
+
+        print(f"    Block {block_idx}/{block_num}: idx={idx} accepted={total_accepted}/{total_proposed} invalid={total_invalid} ({time.time()-block_t0:.1f}s)", flush=True)
 
     total_valid = total_proposed - total_invalid
     acceptance_rate = total_accepted / max(total_valid, 1)

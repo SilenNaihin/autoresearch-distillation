@@ -279,11 +279,15 @@ def main():
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     output_path = Path(OUTPUT_DIR) / f"{args.run_name}-{int(time.time())}.jsonl"
 
-    baseline = Path("autoresearch/train.py").read_text()
+    baseline = Path("train.py").read_text()
     structure_validator = make_structure_validator(baseline)
 
+    import httpx
     from openai import OpenAI
-    client = OpenAI(base_url=args.vllm_base_url, api_key="dummy")
+    client = OpenAI(
+        base_url=args.vllm_base_url, api_key="dummy",
+        timeout=httpx.Timeout(connect=30.0, read=1800.0, write=30.0, pool=30.0),
+    )
 
     print(f"Model:       {args.model}")
     print(f"vLLM:        {args.vllm_base_url}")
