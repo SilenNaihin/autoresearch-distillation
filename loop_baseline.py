@@ -1,22 +1,13 @@
 """
-Multi-turn baseline: Qwen3-14B base model with mini-swe-agent, no weight updates.
+Single-shot baseline: one LLM generation per turn, no agent loop.
 
-Identical to the SDPO loop except no training — measures pure in-context learning.
-The model uses bash tools to edit train.py (same interface as SDPO's agent_loop.py),
-then we dispatch the modified file to the A100 for a 5-min experiment.
+Each turn: one LLM call with bash tool → execute tool calls → dispatch experiment.
+ICL mode feeds back previous results; single-turn mode has no feedback.
+No mini-swe-agent, no multi-step agent loop — just symbolic tool use.
 
-Architecture:
-    box1 (h100_azure): vLLM server (Qwen3-14B) + this script
-    a100-backup-1:     experiment execution
+Supports vLLM (local/remote) and Bedrock (Claude) via litellm.
 
-Setup (on box1):
-    pip install vllm wandb mini-swe-agent
-    # Start vLLM server first:
-    vllm serve Qwen/Qwen3-14B --port 8000 --dtype bfloat16 --gpu-memory-utilization 0.9
-    # Then run baseline:
-    python loop_baseline.py --max-turns 30
-
-Compare wandb curves: autoresearch-baseline vs autoresearch-sdpo
+    python loop_baseline.py --max-turns 50 --run-name my-run --experiment-host h100-dev-box-2
 """
 
 import argparse
@@ -31,14 +22,89 @@ from pathlib import Path
 
 import wandb
 
-from bash_tool import create_isolated_workdir, run_agent_episode
+import litellm
+
+from bash_tool import create_isolated_workdir
 from environment import BASELINE_VAL_BPB, compute_reward, parse_metrics
 from experiment_cache import BASELINE_CACHE, ExperimentCache
 from runners import GPUSlot, SSHRunner
 
+BASH_TOOL_SCHEMA = {
+    "type": "function",
+    "function": {
+        "name": "bash",
+        "description": "Execute a bash command in the working directory containing train.py.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "command": {"type": "string", "description": "The bash command to run"}
+            },
+            "required": ["command"],
+        },
+    },
+}
+
+
+def run_single_generation(
+    workdir: str,
+    model_name: str,
+    system_prompt: str,
+    instance_prompt: str,
+    provider_kwargs: dict,
+) -> tuple[str, list[dict]]:
+    """Single-shot: one LLM call with bash tool, execute all tool calls, read result.
+
+    Returns (modified_train_py, trajectory).
+    """
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": instance_prompt},
+    ]
+
+    response = litellm.completion(
+        model=model_name,
+        messages=messages,
+        tools=[BASH_TOOL_SCHEMA],
+        **provider_kwargs,
+    )
+
+    choice = response.choices[0]
+    content = choice.message.content or ""
+    tool_calls = choice.message.tool_calls or []
+
+    trajectory = [{"role": "assistant", "content": content, "tool_calls": len(tool_calls)}]
+
+    # Execute all tool calls in the workdir
+    env = os.environ.copy()
+    env.update({"PAGER": "cat", "TQDM_DISABLE": "1"})
+
+    for tc in tool_calls:
+        try:
+            args = json.loads(tc.function.arguments) if isinstance(tc.function.arguments, str) else tc.function.arguments
+            cmd = args.get("command", "")
+        except (json.JSONDecodeError, AttributeError):
+            continue
+        if not cmd:
+            continue
+        try:
+            result = subprocess.run(
+                cmd, shell=True, capture_output=True, text=True,
+                cwd=workdir, env=env, timeout=30,
+            )
+            trajectory.append({
+                "role": "tool", "command": cmd,
+                "stdout": result.stdout[:500], "stderr": result.stderr[:500],
+                "returncode": result.returncode,
+            })
+        except subprocess.TimeoutExpired:
+            trajectory.append({"role": "tool", "command": cmd, "error": "timeout"})
+
+    modified = Path(os.path.join(workdir, "train.py")).read_text()
+    return modified, trajectory
+
 # Baseline-specific system prompt (separate from SDPO's prompts.py).
 BASELINE_SYSTEM_PROMPT = """\
-You are an autonomous ML researcher optimizing a GPT pretraining script.
+You are an ML researcher optimizing a GPT pretraining script.
 
 ## Your task
 Modify train.py to lower val_bpb (bits per byte on validation data).
@@ -63,18 +129,17 @@ Violating this triggers an assertion error.
 - The training budget is fixed at 5 minutes. A configuration that processes more training steps \
 in the same time may outperform a larger model that trains fewer steps.
 
-## Workflow
-1. Read the full file — optimizer internals, model architecture, training loop — to find all \
+## How to edit
+Read the full file — optimizer internals, model architecture, training loop — to find all \
 the levers. Think step-by-step about what changes could lower val_bpb.
-2. Make targeted edits to train.py using sed. Do not rewrite the entire file. Example:
+Make targeted edits to train.py using sed. Do not rewrite the entire file. Example:
    <tool_call>
    {"name": "bash", "arguments": {"command": "sed -i 's/OLD_VALUE/NEW_VALUE/' train.py"}}
    </tool_call>
-3. When complete, submit: echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT
+Make all your changes in a single response. We run uv run train.py on a GPU after.
 
 ## Important
 - You are ONLY editing the file. You do NOT run experiments.
-- We will run uv run train.py on a GPU after you submit.
 - Think carefully about what will improve training, then make correct edits.\
 """
 
@@ -225,8 +290,22 @@ def classify_crash(error_text: str) -> str:
 
 
 
+def count_sed_commands(trajectory: list[dict]) -> int:
+    """Count how many sed commands the model issued."""
+    count = 0
+    for msg in trajectory:
+        cmd = msg.get("command", "")
+        if isinstance(cmd, str) and cmd.strip().startswith("sed"):
+            count += 1
+    # Fallback: count in raw string if structured parsing missed them
+    if count == 0:
+        traj_str = str(trajectory)
+        count = traj_str.count("sed -i") + traj_str.count("sed -e")
+    return count
+
+
 def extract_model_thinking(trajectory: list[dict], max_len: int = 1000) -> str:
-    """Extract the <think> block from the first assistant message."""
+    """Extract the <think> block from the assistant message."""
     for msg in trajectory:
         if msg.get("role") == "assistant":
             content = msg.get("content", "")
@@ -239,28 +318,6 @@ def extract_model_thinking(trajectory: list[dict], max_len: int = 1000) -> str:
                         think = think[:max_len] + "..."
                     return think
     return ""
-
-
-def count_sed_commands(trajectory: list[dict]) -> int:
-    """Count how many sed commands the model issued."""
-    count = 0
-    traj_str = str(trajectory)
-    # Count occurrences of sed in tool call commands
-    for msg in trajectory:
-        extras = msg.get("extra", {})
-        if isinstance(extras, str):
-            if "'command': \"sed " in extras or "'command': 'sed " in extras:
-                count += 1
-        elif isinstance(extras, dict):
-            actions = extras.get("actions", [])
-            if isinstance(actions, list):
-                for a in actions:
-                    if isinstance(a, dict) and str(a.get("command", "")).strip().startswith("sed"):
-                        count += 1
-    # Fallback: count in raw string if structured parsing missed them
-    if count == 0:
-        count = traj_str.count("sed -i") + traj_str.count("sed -e")
-    return count
 
 
 def extract_changed_variables(diff_text: str) -> list[str]:
@@ -383,8 +440,6 @@ def main():
     parser = argparse.ArgumentParser(description="Multi-turn baseline (in-context learning)")
     parser.add_argument("--model", type=str, default=MODEL)
     parser.add_argument("--max-turns", type=int, default=30)
-    parser.add_argument("--step-limit", type=int, default=30,
-                        help="Max bash tool calls per episode")
     parser.add_argument("--temperature", type=float, default=1.0)
     parser.add_argument("--vllm-base-url", type=str, default=VLLM_BASE_URL)
     parser.add_argument("--run-name", type=str, default="qwen3-14b-baseline")
@@ -397,8 +452,6 @@ def main():
                         help="CUDA device index on experiment host")
     parser.add_argument("--cache-sync-host", type=str, default=None,
                         help="SSH host to sync shared cache to/from (e.g. 74.179.57.153)")
-    parser.add_argument("--verl-compat", action="store_true",
-                        help="Treat no-tool-call responses as submission (for VERL-trained models)")
     parser.add_argument("--provider", type=str, default="vllm",
                         choices=["vllm", "bedrock"],
                         help="LLM provider: vllm (local/remote vLLM) or bedrock (AWS)")
@@ -416,49 +469,37 @@ def main():
 
     baseline = Path("autoresearch/train.py").read_text()
 
-    print(f"Model:       {args.model}")
-    print(f"vLLM:        {args.vllm_base_url}")
+    # Build litellm model name and provider kwargs
+    if args.provider == "bedrock":
+        litellm_model = f"bedrock/{args.model}"
+        provider_kwargs = {"temperature": args.temperature}
+    else:
+        litellm_model = f"openai/{args.model}"
+        provider_kwargs = {
+            "api_base": args.vllm_base_url,
+            "api_key": "dummy",
+            "temperature": args.temperature,
+        }
+
+    print(f"Model:       {litellm_model}")
     print(f"Max turns:   {args.max_turns}")
-    print(f"Step limit:  {args.step_limit}")
     print(f"Temperature: {args.temperature}")
     print(f"Single-turn: {args.single_turn}")
     print(f"Fleet:       {[s.name for s in EXPERIMENT_FLEET]}")
     print(f"Output:      {output_path}")
     print()
 
-    # Create mini-swe-agent model
-    from minisweagent.models.litellm_model import LitellmModel
-    if args.provider == "bedrock":
-        model = LitellmModel(
-            model_name=f"bedrock/{args.model}",
-            model_kwargs={
-                "temperature": args.temperature,
-            },
-            cost_tracking="ignore_errors",
-        )
-    else:
-        model = LitellmModel(
-            model_name=f"openai/{args.model}",
-            model_kwargs={
-                "api_base": args.vllm_base_url,
-                "api_key": "dummy",
-                "temperature": args.temperature,
-            },
-            cost_tracking="ignore_errors",
-        )
-
     # Init wandb
     config = {
         "model": args.model,
         "max_turns": args.max_turns,
-        "step_limit": args.step_limit,
         "temperature": args.temperature,
         "single_turn": args.single_turn,
         "seed": args.seed,
         "fleet": [s.name for s in EXPERIMENT_FLEET],
         "baseline_val_bpb": BASELINE_VAL_BPB,
         "method": "single-turn sampling (no feedback)" if args.single_turn
-                  else "multi-turn ICL (no weight updates)",
+                  else "ICL (no weight updates)",
     }
     wandb.init(project="autoresearch-baseline", name=args.run_name, config=config)
     log_jsonl(output_path, {"config": config})
@@ -498,37 +539,36 @@ def main():
             if feedback_block:
                 instance_prompt += "\n\n" + feedback_block
 
-        # Run mini-swe-agent episode (model edits train.py via bash)
+        # Single-shot generation: one LLM call, execute tool calls, read result
         workdir = create_isolated_workdir()
         agent_t0 = time.time()
         try:
-            modified, trajectory = run_agent_episode(
+            modified, trajectory = run_single_generation(
                 workdir=workdir,
-                model=model,
+                model_name=litellm_model,
                 system_prompt=BASELINE_SYSTEM_PROMPT,
                 instance_prompt=instance_prompt,
-                step_limit=args.step_limit,
-                verl_compat=args.verl_compat,
+                provider_kwargs=provider_kwargs,
             )
         except Exception as e:
             import traceback
             tb = traceback.format_exc()
-            print(f"  Agent episode failed: {e}")
+            print(f"  Generation failed: {e}")
             print(f"  Traceback: {tb}")
             cumulative_crashes += 1
             turn_results.append({
                 "turn": turn,
                 "val_bpb": None,
                 "diff": "",
-                "status": "agent_error",
+                "status": "generation_error",
                 "crash_reason": str(e)[:200],
             })
-            wandb.log({"turn": turn, "status": "agent_error", "reward": 0.0,
+            wandb.log({"turn": turn, "status": "generation_error", "reward": 0.0,
                         "prompt_len": len(instance_prompt),
                         "cumulative_crashes": cumulative_crashes,
                         "cumulative_successes": cumulative_successes})
             log_jsonl(output_path, {
-                "turn": turn, "status": "agent_error",
+                "turn": turn, "status": "generation_error",
                 "error": str(e), "traceback": tb,
                 "experiment_time": time.time() - t0,
                 "prompt_len": len(instance_prompt),
@@ -542,16 +582,10 @@ def main():
         experiment_stdout = ""  # populated after dispatch
 
         diff_text = make_diff(baseline, modified)
-        n_tool_calls = sum(1 for m in trajectory if m.get("role") == "assistant"
-                          and "tool_calls" in str(m.get("content", "")))
+        tool_msgs = [m for m in trajectory if m.get("role") == "tool"]
+        n_tool_calls = len(tool_msgs)
         trajectory_len = len(trajectory)
-        # Check if search.py was actually called (not just mentioned in system prompt)
-        used_search = any(
-            "search.py" in str(a.get("command", ""))
-            for m in trajectory
-            for a in (m.get("extra", {}) or {}).get("actions", [])
-            if isinstance(a, dict)
-        )
+        used_search = any("search.py" in m.get("command", "") for m in tool_msgs)
         diff_size = len(diff_text)
 
         model_thinking = extract_model_thinking(trajectory)
