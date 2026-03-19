@@ -76,7 +76,7 @@ def _get_pool():
 # ---------------------------------------------------------------------------
 
 INJECT_BEST_DIFF = False
-SUCCESS_REINFORCEMENT_HITS = 3  # cache hits before switching from reinforcement to redirection
+SUCCESS_REINFORCEMENT_HITS = 1  # cache hits before switching from reinforcement to redirection
 print(f"[autoresearch] INJECT_BEST_DIFF={INJECT_BEST_DIFF} SUCCESS_REINFORCEMENT_HITS={SUCCESS_REINFORCEMENT_HITS}")
 
 @register("autoresearch_agent")

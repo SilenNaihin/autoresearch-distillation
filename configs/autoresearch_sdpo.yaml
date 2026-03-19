@@ -11,7 +11,7 @@ max_model_len: 65536
 data:
   train_files: ["${vars.dir}/data/autoresearch/train.parquet"]
   val_files: ["${vars.dir}/data/autoresearch/test.parquet"]
-  train_batch_size: 1
+  train_batch_size: 16
   max_prompt_length: 16384
   max_response_length: 49152
   apply_chat_template_kwargs: {"enable_thinking": true}
@@ -28,7 +28,7 @@ actor_rollout_ref:
       attn_implementation: flash_attention_2
   actor:
     ppo_micro_batch_size_per_gpu: 1
-    ppo_mini_batch_size: 1
+    ppo_mini_batch_size: 16
     ppo_max_token_len_per_gpu: ${max_model_len}
     use_dynamic_bsz: False
     ulysses_sequence_parallel_size: 2
@@ -40,7 +40,7 @@ actor_rollout_ref:
     policy_loss:
       loss_mode: sdpo
     self_distillation:
-      teacher_update_rate: 0.05
+      teacher_update_rate: 0.01
       max_reprompt_len: 10240
       is_clip: 2.0
       alpha: 0.5
@@ -60,7 +60,7 @@ actor_rollout_ref:
 
         Using the information above, provide the best possible solution.
     optim:
-      lr: 1e-6
+      lr: 5e-6
       lr_warmup_steps: 5
   rollout:
     name: vllm
@@ -89,7 +89,6 @@ actor_rollout_ref:
       format: hermes
       interaction_config_path: null
     agent:
-      num_workers: 1
       default_agent_loop: autoresearch_agent
       agent_loop_config_path: ${vars.dir}/configs/agent_loops.yaml
 
