@@ -189,7 +189,7 @@ class AutoresearchAgentLoop(ToolAgentLoop):
                       "mfu_percent", "total_tokens_M", "num_steps", "num_params_M", "depth"):
                 env_metrics[f"env_{k}"] = float(getattr(self, '_last_env_metrics', {}).get(k, float('nan')))
             env_metrics["env_novel"] = self._is_novel
-            output.extra_fields["reward_extra_info"] = {"feedback": feedback, "parent_id": self._parent_id, **env_metrics}
+            output.extra_fields["reward_extra_info"] = {"feedback": feedback, "parent_id": int(self._parent_id), **env_metrics}
 
             return output
         finally:
