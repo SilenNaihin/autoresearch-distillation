@@ -684,8 +684,10 @@ class RayPPOTrainer:
         response_mask = batch.batch["response_mask"]
         responses = batch.batch["responses"]
         response_texts = [self.tokenizer.decode(ids, skip_special_tokens=True) for ids in responses]
+        # Prefer agent-modified prompt (e.g. with reuse buffer state) over original dataset prompt
+        raw_prompts = batch.non_tensor_batch.get("agent_raw_prompt", batch.non_tensor_batch["raw_prompt"])
         prompt_texts = []
-        for i, msgs in enumerate(batch.non_tensor_batch["raw_prompt"]):
+        for i, msgs in enumerate(raw_prompts):
             prompt_texts.append(msgs[-1]["content"])
         batch_size = batch.batch.batch_size[0]
 
@@ -710,7 +712,7 @@ class RayPPOTrainer:
         ]
 
         def _build_teacher_message(i: int) -> list[dict]:
-            system_messages = batch.non_tensor_batch["raw_prompt"][i][:-1]
+            system_messages = raw_prompts[i][:-1]
             has_solution = solution_strs[i] is not None
             has_feedback = feedback_list[i] is not None
             feedback_only_without_solution = self_distillation_cfg.get("environment_feedback_only_without_solution", False)
