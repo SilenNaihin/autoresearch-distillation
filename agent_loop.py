@@ -27,6 +27,7 @@ from difflib import unified_diff
 from pathlib import Path
 from typing import Any
 
+from experiment_cache import SDPO_CACHE, ExperimentCache
 from reuse_buffer import ReuseBuffer
 
 # Ensure SDPO's verl is importable
@@ -106,6 +107,7 @@ class AutoresearchAgentLoop(ToolAgentLoop):
         _buffer_kwargs = {"c_puct": c_puct, "max_states": max_states}
 
         self._sed_failed: str | None = None  # tracked but no longer triggers early termination
+        self._cache = ExperimentCache(write_path=SDPO_CACHE)
 
     async def run(self, sampling_params: dict[str, Any], **kwargs) -> AgentLoopOutput:
         """Override run() to add pre-creation and post-submission logic."""
@@ -300,6 +302,18 @@ class AutoresearchAgentLoop(ToolAgentLoop):
                 feedback = "No changes were made to train.py. You must make new creative edits to reduce validation loss."
             return 0.0, feedback
 
+        # Check experiment cache — avoid re-dispatching identical diffs
+        cached = self._cache.get(diff_text, current_step=self._global_step)
+        if cached is not None:
+            reward, feedback = cached["reward"], cached["feedback"]
+            if cached.get("crashed"):
+                feedback += "\n\nThis exact set of changes has been tried before and crashed. Do not re-attempt this change."
+            elif reward > 0:
+                feedback += "\n\nSUCCESS: These changes reduced validation loss. Combine with additional modifications."
+            else:
+                feedback += "\n\nThis exact set of changes has been tried before and did not reduce validation loss."
+            return reward, feedback
+
         # Dispatch to GPU fleet (blocking I/O → run in thread)
         self._is_novel = 1.0
         pool = _get_pool()
@@ -319,6 +333,9 @@ class AutoresearchAgentLoop(ToolAgentLoop):
             logger.warning(f"Experiment crashed (exit {output.returncode}): {crash_info}")
             feedback = (f"Changes from previous attempt:\n{diff_text}\n\n"
                         f"These changes caused the experiment to crash (exit {output.returncode}):\n{crash_info}")
+            # Cache CUDA OOMs (deterministic), but not transient crashes (SSH, segfault)
+            if "CUDA out of memory" in crash_info:
+                self._cache.put(diff_text, {"reward": 0.0, "feedback": feedback, "crashed": True}, step=self._global_step)
             return 0.0, f"{feedback}\n\nDo not re-attempt this change."
 
         val_bpb = metrics.get("val_bpb")
@@ -340,7 +357,9 @@ class AutoresearchAgentLoop(ToolAgentLoop):
 
         feedback = f"Changes from previous attempt:\n{diff_text}\n\n{reward_feedback}\n{metrics_line}"
 
-        # Add successful states to the reuse buffer
+        # Cache result and add successful states to the reuse buffer
+        self._cache.put(diff_text, {"reward": reward, "feedback": feedback},
+                        step=self._global_step, val_bpb=val_bpb, diff_text_raw=diff_text)
         if reward > 0:
             buffer = _get_buffer()
             buffer.add(modified, val_bpb, reward, self._parent_id)
