@@ -45,7 +45,7 @@ class ReuseBuffer:
         max_states: Maximum number of states before pruning.
     """
 
-    def __init__(self, path: Path, c_puct: float = 1.0, max_states: int = 200):
+    def __init__(self, path: Path, c_puct: float = 1.0, max_states: int = 1000):
         self._path = Path(path)
         self._c_puct = c_puct
         self._max_states = max_states

@@ -1,3 +1,5 @@
 - name: autoresearch_agent
   _target_: agent_loop.AutoresearchAgentLoop
   _recursive_: false
+  c_puct: 1.0
+  max_states: 1000

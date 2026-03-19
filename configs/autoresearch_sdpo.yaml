@@ -43,8 +43,8 @@ actor_rollout_ref:
       teacher_update_rate: 0.01
       max_reprompt_len: 10240
       is_clip: 2.0
-      alpha: 0.5
-      distillation_topk: 100
+      alpha: 1.0
+      distillation_topk: 20
       success_reward_threshold: 0.0
       dont_reprompt_on_self_success: True
       include_environment_feedback: True

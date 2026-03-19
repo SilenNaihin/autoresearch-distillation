@@ -77,6 +77,7 @@ def _get_pool():
 
 _buffer = None
 _buffer_lock = threading.Lock()
+_buffer_kwargs: dict = {}  # set from agent loop __init__
 
 
 def _get_buffer() -> ReuseBuffer:
@@ -85,7 +86,7 @@ def _get_buffer() -> ReuseBuffer:
     if _buffer is None:
         with _buffer_lock:
             if _buffer is None:
-                _buffer = ReuseBuffer(Path("/data/reuse_buffer.json"))
+                _buffer = ReuseBuffer(Path("/data/reuse_buffer.json"), **_buffer_kwargs)
     return _buffer
 
 
@@ -99,8 +100,10 @@ class AutoresearchAgentLoop(ToolAgentLoop):
       3. Compute reward from experiment results
     """
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, c_puct: float = 1.0, max_states: int = 1000, **kwargs):
         super().__init__(*args, **kwargs)
+        global _buffer_kwargs
+        _buffer_kwargs = {"c_puct": c_puct, "max_states": max_states}
 
         self._sed_failed: str | None = None  # tracked but no longer triggers early termination
 
