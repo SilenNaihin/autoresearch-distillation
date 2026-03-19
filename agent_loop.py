@@ -27,7 +27,7 @@ from difflib import unified_diff
 from pathlib import Path
 from typing import Any
 
-from experiment_cache import SDPO_CACHE, ExperimentCache
+from reuse_buffer import ReuseBuffer
 
 # Ensure SDPO's verl is importable
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "SDPO"))
@@ -75,9 +75,19 @@ def _get_pool():
 # Agent loop
 # ---------------------------------------------------------------------------
 
-INJECT_BEST_DIFF = False
-SUCCESS_REINFORCEMENT_HITS = 1  # cache hits before switching from reinforcement to redirection
-print(f"[autoresearch] INJECT_BEST_DIFF={INJECT_BEST_DIFF} SUCCESS_REINFORCEMENT_HITS={SUCCESS_REINFORCEMENT_HITS}")
+_buffer = None
+_buffer_lock = threading.Lock()
+
+
+def _get_buffer() -> ReuseBuffer:
+    """Lazily initialize the shared ReuseBuffer singleton."""
+    global _buffer
+    if _buffer is None:
+        with _buffer_lock:
+            if _buffer is None:
+                _buffer = ReuseBuffer(Path("/data/reuse_buffer.json"))
+    return _buffer
+
 
 @register("autoresearch_agent")
 class AutoresearchAgentLoop(ToolAgentLoop):
@@ -93,7 +103,6 @@ class AutoresearchAgentLoop(ToolAgentLoop):
         super().__init__(*args, **kwargs)
 
         self._sed_failed: str | None = None  # tracked but no longer triggers early termination
-        self._cache = ExperimentCache(write_path=SDPO_CACHE)  # persistent, shared with baseline
 
     async def run(self, sampling_params: dict[str, Any], **kwargs) -> AgentLoopOutput:
         """Override run() to add pre-creation and post-submission logic."""
@@ -111,23 +120,45 @@ class AutoresearchAgentLoop(ToolAgentLoop):
         self._noop_tool_calls = 0    # commands that don't touch train.py
         self._sed_failed = None
 
-        # Inject best-diff into prompt so model can build on best result
-        self._best_diff_used = ""
-        if INJECT_BEST_DIFF and "raw_prompt" in kwargs:
-            best_diff = self._cache.get_best_diff()
-            if best_diff:
-                self._best_diff_used = best_diff
-                kwargs["raw_prompt"] = list(kwargs["raw_prompt"])  # don't mutate dataset
-                last_msg = dict(kwargs["raw_prompt"][-1])
-                last_msg["content"] += f"\n\n## Best result so far\n{best_diff}"
-                kwargs["raw_prompt"][-1] = last_msg
+        # Select a state from the reuse buffer for this rollout
+        from prompts import replace_train_py_in_prompt
+        from environment import BASELINE_VAL_BPB
+
+        buffer = _get_buffer()
+        # Seed with baseline train.py if buffer is empty
+        bash_tool = self.tools.get("bash")
+        if bash_tool and len(buffer) == 0:
+            baseline_code = Path(bash_tool.autoresearch_dir, "train.py").read_text()
+            buffer.seed(baseline_code, BASELINE_VAL_BPB)
+
+        selections = buffer.select(1)
+        if selections:
+            self._parent_id, self._selected_code = selections[0]
+        else:
+            # Fallback: use baseline directly
+            self._parent_id = 0
+            self._selected_code = Path(bash_tool.autoresearch_dir, "train.py").read_text() if bash_tool else ""
+
+        # Replace train.py in prompt with the selected state's code
+        if "raw_prompt" in kwargs:
+            kwargs["raw_prompt"] = list(kwargs["raw_prompt"])  # don't mutate dataset
+            last_msg = dict(kwargs["raw_prompt"][-1])
+            last_msg["content"] = replace_train_py_in_prompt(last_msg["content"], self._selected_code)
+            # Append best val_bpb target if better than baseline
+            best_bpb = buffer.get_best_val_bpb()
+            if best_bpb < BASELINE_VAL_BPB:
+                last_msg["content"] += f"\n\n## Best val_bpb achieved so far: {best_bpb:.6f} (baseline={BASELINE_VAL_BPB})"
+            kwargs["raw_prompt"][-1] = last_msg
 
         # Pre-create persistent bash tool instance
-        bash_tool = self.tools.get("bash")
         instance_id = None
 
         if bash_tool:
             instance_id, _ = await bash_tool.create()
+            # Overwrite workdir train.py with the selected state's code
+            workdir = bash_tool.get_workdir(instance_id)
+            if workdir and self._selected_code:
+                Path(workdir, "train.py").write_text(self._selected_code)
             # Store instance_id where _call_tool can find it
             kwargs.setdefault("tools_kwargs", {})
             kwargs["tools_kwargs"]["_bash_instance_id"] = instance_id
@@ -158,7 +189,7 @@ class AutoresearchAgentLoop(ToolAgentLoop):
                       "mfu_percent", "total_tokens_M", "num_steps", "num_params_M", "depth"):
                 env_metrics[f"env_{k}"] = float(getattr(self, '_last_env_metrics', {}).get(k, float('nan')))
             env_metrics["env_novel"] = self._is_novel
-            output.extra_fields["reward_extra_info"] = {"feedback": feedback, "best_diff_used": self._best_diff_used, **env_metrics}
+            output.extra_fields["reward_extra_info"] = {"feedback": feedback, "parent_id": self._parent_id, **env_metrics}
 
             return output
         finally:
@@ -253,36 +284,18 @@ class AutoresearchAgentLoop(ToolAgentLoop):
             logger.warning(f"No modified train.py found for instance {instance_id}")
             return 0.0, "No modified train.py found."
 
-        # Generate diff between baseline and modified train.py for teacher feedback
-        baseline = Path(bash_tool.autoresearch_dir, "train.py").read_text()
-        diff_text = _make_diff(baseline, modified)
+        # Diff against the selected parent state (not fixed baseline)
+        diff_text = _make_diff(self._selected_code, modified)
 
         from environment import BASELINE_VAL_BPB, compute_reward, parse_metrics
 
-        if baseline == modified:
+        if self._selected_code == modified:
             if self._sed_failed:
                 feedback = (f"FAILURE: your sed command failed: {self._sed_failed}\n\n"
                             "You must specify the target file and ensure the pattern matches exactly.")
             else:
                 feedback = "No changes were made to train.py. You must make new creative edits to reduce validation loss."
-            return -1.0, feedback
-
-        # Check experiment cache — successful runs and CUDA OOMs are cached
-        cached = self._cache.get(diff_text, current_step=self._global_step)
-        if cached is not None:
-            reward, feedback = cached["reward"], cached["feedback"]
-            hits = cached.get("hits", 1)
-            if cached.get("crashed"):
-                suffix = "This exact set of changes has been tried before and crashed. Do not re-attempt this change."
-            elif reward > 0 and hits <= SUCCESS_REINFORCEMENT_HITS:
-                suffix = (f"SUCCESS: These changes reduced validation loss. This is a good result (repeated {hits}/{SUCCESS_REINFORCEMENT_HITS}). "
-                          "Repeat this approach and combine it with additional modifications to reduce validation loss further.")
-            elif reward > 0:
-                suffix = (f"This exact set of changes has been tried before and reduced validation loss (repeated {hits}/{SUCCESS_REINFORCEMENT_HITS}). "
-                          "Do not re-attempt this exact set of changes. Combine this change with new modifications you have not yet tried.")
-            else:
-                suffix = "This exact set of changes has been tried before and did not reduce validation loss. Do not re-attempt this change."
-            return reward, f"{feedback}\n\n{suffix}"
+            return 0.0, feedback
 
         # Dispatch to GPU fleet (blocking I/O → run in thread)
         self._is_novel = 1.0
@@ -294,9 +307,6 @@ class AutoresearchAgentLoop(ToolAgentLoop):
         self._last_env_metrics = metrics
 
         if output.returncode != 0:
-            # Combine stderr and stdout tail for maximum crash context.
-            # Remote cmd uses 2>&1, so experiment errors are in stdout;
-            # stderr is SSH-level errors only.
             parts = []
             if output.stderr and output.stderr.strip():
                 parts.append(output.stderr.strip()[:1000])
@@ -306,10 +316,8 @@ class AutoresearchAgentLoop(ToolAgentLoop):
             logger.warning(f"Experiment crashed (exit {output.returncode}): {crash_info}")
             feedback = (f"Changes from previous attempt:\n{diff_text}\n\n"
                         f"These changes caused the experiment to crash (exit {output.returncode}):\n{crash_info}")
-            # Cache CUDA OOMs (deterministic), but not transient crashes (SSH, segfault)
-            if "CUDA out of memory" in crash_info:
-                self._cache.put(diff_text, {"reward": 0.0, "feedback": feedback, "crashed": True}, step=self._global_step)
-            return -1.0, f"{feedback}\n\nDo not re-attempt this change."
+            return 0.0, f"{feedback}\n\nDo not re-attempt this change."
+
         val_bpb = metrics.get("val_bpb")
 
         if val_bpb is None:
@@ -317,8 +325,7 @@ class AutoresearchAgentLoop(ToolAgentLoop):
             logger.warning(f"No val_bpb in experiment output. Tail:\n{tail}")
             feedback = (f"Changes from previous attempt:\n{diff_text}\n\n"
                         f"We were not able to run your experiment. Output tail:\n{tail}")
-            # Don't cache missing metrics — may be transient
-            return -1.0, feedback
+            return 0.0, feedback
 
         reward, status, reward_feedback = compute_reward(val_bpb)
 
@@ -328,13 +335,11 @@ class AutoresearchAgentLoop(ToolAgentLoop):
         if degradation > 0.05:
             reward_feedback += f" These changes made validation loss significantly worse (degraded by {degradation:.6f})."
 
-        # Build feedback without best_text (best_text is dynamic, shouldn't be cached)
         feedback = f"Changes from previous attempt:\n{diff_text}\n\n{reward_feedback}\n{metrics_line}"
 
-        # Cache successful result and update best if this is a new low
-        self._cache.put(diff_text, {"reward": reward, "feedback": feedback},
-                        step=self._global_step, val_bpb=val_bpb, diff_text_raw=diff_text)
-
+        # Add successful states to the reuse buffer
         if reward > 0:
+            buffer = _get_buffer()
+            buffer.add(modified, val_bpb, reward, self._parent_id)
             return reward, f"{feedback}\n\nSUCCESS: These changes reduced validation loss. This is a good result. Repeat this approach and combine it with additional modifications to reduce validation loss further."
         return reward, f"{feedback}\n\nThese changes did not reduce validation loss. Continue exploring new and creative modifications that reduce validation loss."

@@ -29,5 +29,5 @@ trainer:
   experiment_name: qwen3-4b-sdpo-smoke-test
   n_gpus_per_node: 1
   total_epochs: 1
-  total_training_steps: 1
+  total_training_steps: 5
   save_freq: -1

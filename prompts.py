@@ -41,6 +41,23 @@ Violating this triggers an assertion error.
 """
 
 
+def replace_train_py_in_prompt(user_content: str, new_train_py: str) -> str:
+    """Replace the train.py code block in a prompt with new content.
+
+    Looks for the ```python ... ``` block under '## Current train.py' and replaces it.
+    """
+    marker = "## Current train.py\n```python\n"
+    start = user_content.find(marker)
+    if start < 0:
+        return user_content
+    code_start = start + len(marker)
+    # Find the closing ``` — it's the first ``` after the code block opens
+    end = user_content.find("\n```", code_start)
+    if end < 0:
+        return user_content
+    return user_content[:code_start] + new_train_py + user_content[end:]
+
+
 def build_instance_prompt(train_py_content: str, history_lines: list[str]) -> str:
     """Build the task prompt with current train.py."""
     parts = ["## Current train.py\n```python\n" + train_py_content + "\n```"]
