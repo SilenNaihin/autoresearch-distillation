@@ -29,8 +29,8 @@ actor_rollout_ref:
   actor:
     ppo_micro_batch_size_per_gpu: 1
     ppo_mini_batch_size: 4
-    ppo_max_token_len_per_gpu: ${max_model_len}
-    use_dynamic_bsz: False
+    ppo_max_token_len_per_gpu: 16384
+    use_dynamic_bsz: True
     ulysses_sequence_parallel_size: 1
     strategy: fsdp2
     fsdp_config:
