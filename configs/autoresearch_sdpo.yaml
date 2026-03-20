@@ -60,7 +60,7 @@ actor_rollout_ref:
 
         Using the information above, provide the best possible solution.
     optim:
-      lr: 5e-6
+      lr: 1e-6
       lr_warmup_steps: 5
   rollout:
     name: vllm
