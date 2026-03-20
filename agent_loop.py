@@ -136,6 +136,9 @@ class AutoresearchAgentLoop(ToolAgentLoop):
             baseline_code = Path(bash_tool.autoresearch_dir, "train.py").read_text()
             buffer.seed(baseline_code, BASELINE_VAL_BPB)
 
+        # Store original baseline for cache keying (state 0 = seed)
+        self._baseline_code = buffer._data["states"].get("0", {}).get("code", "")
+
         selections = buffer.select(1)
         if selections:
             self._parent_id, self._selected_code = selections[0]
@@ -280,11 +283,19 @@ class AutoresearchAgentLoop(ToolAgentLoop):
             # For any other tool, use default create/execute/release per call
             return await super()._call_tool(tool_call, tools_kwargs, agent_data)
 
+    def _tail(self, output) -> str:
+        """Last 20 lines of stdout, or stderr snippet on empty stdout."""
+        if output.stdout and output.stdout.strip():
+            return "\n".join(output.stdout.strip().splitlines()[-20:])
+        if output.stderr and output.stderr.strip():
+            return output.stderr.strip()[-2000:]
+        return "(no output)"
+
     async def _dispatch_experiment(self, bash_tool, instance_id: str | None) -> tuple[float, str]:
         """Read modified train.py, dispatch to GPU fleet, compute reward.
 
-        Returns (reward, feedback) tuple. Feedback is passed through to SDPO's
-        self-distillation pipeline via extra_fields["reward_extra_info"]["feedback"].
+        Returns (reward, feedback) tuple. Feedback is the diff + raw tail of
+        experiment stdout — no custom parsing or messaging.
         """
         self._is_novel = 0.0
 
@@ -296,30 +307,21 @@ class AutoresearchAgentLoop(ToolAgentLoop):
             logger.warning(f"No modified train.py found for instance {instance_id}")
             return 0.0, "No modified train.py found."
 
-        # Diff against the selected parent state (not fixed baseline)
-        diff_text = _make_diff(self._selected_code, modified)
+        # Two diffs: cache_diff keys on original baseline (same final code = same result),
+        # feedback_diff shows what the model changed relative to the selected parent state
+        cache_diff = _make_diff(self._baseline_code, modified)
+        feedback_diff = _make_diff(self._selected_code, modified)
 
         from environment import BASELINE_VAL_BPB, compute_reward, parse_metrics
 
         if self._selected_code == modified:
-            if self._sed_failed:
-                feedback = (f"FAILURE: your sed command failed: {self._sed_failed}\n\n"
-                            "You must specify the target file and ensure the pattern matches exactly.")
-            else:
-                feedback = "No changes were made to train.py. You must make new creative edits to reduce validation loss."
-            return 0.0, feedback
+            return 0.0, "No changes were made to train.py."
 
         # Check experiment cache — avoid re-dispatching identical diffs
-        cached = self._cache.get(diff_text, current_step=self._global_step)
+        cached = self._cache.get(cache_diff, current_step=self._global_step)
         if cached is not None:
-            reward, feedback = cached["reward"], cached["feedback"]
-            if cached.get("crashed"):
-                feedback += "\n\nThis exact set of changes has been tried before and crashed. Do not re-attempt this change."
-            elif reward > 0:
-                feedback += "\n\nSUCCESS: These changes reduced validation loss. Combine with additional modifications."
-            else:
-                feedback += "\n\nThis exact set of changes has been tried before and did not reduce validation loss."
-            return reward, feedback
+            feedback = f"Diff:\n{feedback_diff}\n\nOutput:\n{cached['tail']}"
+            return cached["reward"], feedback
 
         # Dispatch to GPU fleet (blocking I/O → run in thread)
         self._is_novel = 1.0
@@ -330,45 +332,27 @@ class AutoresearchAgentLoop(ToolAgentLoop):
         metrics = parse_metrics(output.stdout) if output.stdout else {}
         self._last_env_metrics = metrics
 
+        tail = self._tail(output)
+        feedback = f"Diff:\n{feedback_diff}\n\nOutput:\n{tail}"
+
         if output.returncode != 0:
-            parts = []
-            if output.stderr and output.stderr.strip():
-                parts.append(output.stderr.strip()[:1000])
-            if output.stdout and output.stdout.strip():
-                parts.append(output.stdout.strip()[-1000:])
-            crash_info = "\n".join(parts) if parts else "no output"
-            logger.warning(f"Experiment crashed (exit {output.returncode}): {crash_info}")
-            feedback = (f"Changes from previous attempt:\n{diff_text}\n\n"
-                        f"These changes caused the experiment to crash (exit {output.returncode}):\n{crash_info}")
-            # Cache CUDA OOMs (deterministic), but not transient crashes (SSH, segfault)
-            if "CUDA out of memory" in crash_info:
-                self._cache.put(diff_text, {"reward": 0.0, "feedback": feedback, "crashed": True}, step=self._global_step)
-            return 0.0, f"{feedback}\n\nDo not re-attempt this change."
-
-        val_bpb = metrics.get("val_bpb")
-
-        if val_bpb is None:
-            tail = "\n".join(output.stdout.strip().splitlines()[-20:]) if output.stdout else "empty output"
-            logger.warning(f"No val_bpb in experiment output. Tail:\n{tail}")
-            feedback = (f"Changes from previous attempt:\n{diff_text}\n\n"
-                        f"We were not able to run your experiment. Output tail:\n{tail}")
+            logger.warning(f"Experiment crashed (exit {output.returncode})")
+            if "CUDA out of memory" in (output.stderr or "") + (output.stdout or ""):
+                self._cache.put(cache_diff, {"reward": 0.0, "tail": tail, "crashed": True}, step=self._global_step)
             return 0.0, feedback
 
-        reward, status, reward_feedback = compute_reward(val_bpb)
+        val_bpb = metrics.get("val_bpb")
+        if val_bpb is None:
+            logger.warning(f"No val_bpb in experiment output")
+            return 0.0, feedback
 
+        reward, status, _ = compute_reward(val_bpb)
         logger.info(f"Experiment: val_bpb={val_bpb}, reward={reward:.4f}, status={status}")
-        metrics_line = " | ".join(f"{k}: {metrics[k]:g}" for k in ("num_steps", "num_params_M", "peak_vram_mb", "mfu_percent"))
-        degradation = val_bpb - BASELINE_VAL_BPB
-        if degradation > 0.05:
-            reward_feedback += f" These changes made validation loss significantly worse (degraded by {degradation:.6f})."
-
-        feedback = f"Changes from previous attempt:\n{diff_text}\n\n{reward_feedback}\n{metrics_line}"
 
         # Cache result and add successful states to the reuse buffer
-        self._cache.put(diff_text, {"reward": reward, "feedback": feedback},
-                        step=self._global_step, val_bpb=val_bpb, diff_text_raw=diff_text)
+        self._cache.put(cache_diff, {"reward": reward, "tail": tail},
+                        step=self._global_step, val_bpb=val_bpb, diff_text_raw=cache_diff)
         if reward > 0:
             buffer = _get_buffer()
             buffer.add(modified, val_bpb, reward, self._parent_id)
-            return reward, f"{feedback}\n\nSUCCESS: These changes reduced validation loss. This is a good result. Repeat this approach and combine it with additional modifications to reduce validation loss further."
-        return reward, f"{feedback}\n\nThese changes did not reduce validation loss. Continue exploring new and creative modifications that reduce validation loss."
+        return reward, feedback

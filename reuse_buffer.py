@@ -113,8 +113,21 @@ class ReuseBuffer:
             self._data["next_id"] = 1
             self._save()
 
+    def _ancestors(self, sid: str) -> list[str]:
+        """Walk parent chain from sid (exclusive) to root. Returns list of ancestor sids."""
+        states = self._data["states"]
+        ancestors = []
+        current = states.get(sid)
+        while current is not None and current["parent_id"] is not None:
+            pid = str(current["parent_id"])
+            if pid not in states:
+                break
+            ancestors.append(pid)
+            current = states[pid]
+        return ancestors
+
     def add(self, code: str, val_bpb: float, reward: float, parent_id: int) -> int:
-        """Add a new state and update parent's best_child_reward. Returns new state id."""
+        """Add a new state and propagate reward up ancestor chain. Returns new state id."""
         with self._lock:
             sid = self._data["next_id"]
             self._data["next_id"] = sid + 1
@@ -127,10 +140,10 @@ class ReuseBuffer:
                 "n_visits": 0,
                 "best_child_reward": 0.0,
             }
-            # Update parent's best_child_reward
-            parent = self._data["states"].get(str(parent_id))
-            if parent is not None:
-                parent["best_child_reward"] = max(parent["best_child_reward"], reward)
+            # Propagate reward up to all ancestors (Q = max descendant reward)
+            for anc_sid in self._ancestors(str(sid)):
+                anc = self._data["states"][anc_sid]
+                anc["best_child_reward"] = max(anc["best_child_reward"], reward)
             self._prune()
             self._save()
             return sid
@@ -160,7 +173,7 @@ class ReuseBuffer:
         return scores
 
     def select(self, n: int) -> list[tuple[int, str]]:
-        """Pick n states by PUCT score, increment visits. Returns [(id, code), ...]."""
+        """Pick n states by PUCT score, increment visits for state and ancestors. Returns [(id, code), ...]."""
         with self._lock:
             states = self._data["states"]
             if not states:
@@ -175,6 +188,9 @@ class ReuseBuffer:
                 state = states[sid]
                 state["n_visits"] += 1
                 self._data["total_visits"] += 1
+                # Propagate visit count up ancestor chain
+                for anc_sid in self._ancestors(sid):
+                    states[anc_sid]["n_visits"] += 1
                 results.append((state["id"], state["code"]))
 
             self._save()
