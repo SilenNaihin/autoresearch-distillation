@@ -50,6 +50,11 @@ export CUDA_VISIBLE_DEVICES=0
 # Let vLLM auto-select attention backend
 unset VLLM_ATTENTION_BACKEND
 
+# Redirect torch inductor cache to /data (root partition is small)
+export TORCHINDUCTOR_DIR=/data/torchinductor
+export TMPDIR=/data/tmp
+export XDG_CACHE_HOME=/data/cache
+
 ulimit -c 0
 
 # Patch HF cached config.json to enforce YaRN settings
