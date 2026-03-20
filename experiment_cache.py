@@ -30,6 +30,7 @@ logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "WARN"))
 CACHE_DIR = Path("/data/cache")
 BASELINE_CACHE = CACHE_DIR / "baseline.json"
 SDPO_CACHE = CACHE_DIR / "sdpo.json"
+GRPO_CACHE = CACHE_DIR / "grpo.json"
 
 FLOCK_TIMEOUT = 60  # seconds
 
@@ -57,7 +58,7 @@ class ExperimentCache:
 
     def __init__(self, write_path: Path, read_paths: list[Path] | None = None):
         self._write_path = write_path
-        self._read_paths = read_paths or [BASELINE_CACHE, SDPO_CACHE]
+        self._read_paths = read_paths or [BASELINE_CACHE, SDPO_CACHE, GRPO_CACHE]
         self._lock = threading.Lock()
         self._cache: dict[str, dict] = {}
         self._best_val_bpb: float = 1e9

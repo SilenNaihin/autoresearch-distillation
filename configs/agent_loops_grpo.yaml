@@ -1,0 +1,3 @@
+- name: autoresearch_grpo_agent
+  _target_: agent_loop_grpo.GRPOAgentLoop
+  _recursive_: false
