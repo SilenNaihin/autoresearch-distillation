@@ -49,7 +49,7 @@ logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "WARN"))
 from runners import GPUSlot, GPUPoolRunner
 
 GRPO_FLEET = [
-    GPUSlot("h100-dev-box-6", "1", "box6-gpu1", "~/autoresearch-gpu1"),
+    GPUSlot("h100-dev-box-2", "0", "box2-gpu0", "~/autoresearch"),
 ]
 
 _pool = None

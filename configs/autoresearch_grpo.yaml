@@ -1,4 +1,4 @@
-# GRPO baseline config for autoresearch on box6 (1 GPU training, 1 GPU experiments)
+# GRPO baseline config for autoresearch on box6 (2 GPU training TP=2, experiments on box2)
 # Mirrors SDPO config but without self-distillation, reuse buffer, or feedback pipeline.
 # Usage: bash scripts/run_grpo.sh
 
@@ -29,14 +29,14 @@ actor_rollout_ref:
   actor:
     ppo_micro_batch_size_per_gpu: 1
     ppo_mini_batch_size: 4
-    ppo_max_token_len_per_gpu: 16384
-    use_dynamic_bsz: True
-    ulysses_sequence_parallel_size: 1
+    ppo_max_token_len_per_gpu: ${max_model_len}
+    use_dynamic_bsz: False
+    ulysses_sequence_parallel_size: 2
     strategy: fsdp2
     fsdp_config:
       strategy: fsdp2
       offload_policy: true
-      ulysses_sequence_parallel_size: 1
+      ulysses_sequence_parallel_size: 2
     optim:
       lr: 5e-6
       lr_warmup_steps: 5
@@ -44,7 +44,7 @@ actor_rollout_ref:
     name: vllm
     n: 4
     temperature: 1.0
-    tensor_model_parallel_size: 1
+    tensor_model_parallel_size: 2
     gpu_memory_utilization: 0.65
     max_model_len: ${max_model_len}
     max_num_batched_tokens: ${max_model_len}
@@ -87,7 +87,7 @@ reward_model:
 trainer:
   project_name: autoresearch-grpo
   experiment_name: qwen3-14b-grpo
-  n_gpus_per_node: 1
+  n_gpus_per_node: 2
   nnodes: 1
   total_epochs: 1000
   test_freq: -1

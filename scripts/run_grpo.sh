@@ -3,15 +3,9 @@ set -euo pipefail
 
 # ============================================================================
 # GRPO Baseline Training Launcher for Autoresearch
-# GPU 0 for training (vLLM rollout + FSDP2 actor), GPU 1 for experiments
+# Both GPUs on box6 for training (TP=2 vLLM rollout + FSDP2 actor)
+# Experiments dispatched to box2 via SSH
 # Run on box6 (h100-dev-box-6, 2xH100 NVL)
-#
-# If TP=1 OOMs, switch to TP=2 with:
-#   CUDA_VISIBLE_DEVICES=0,1 and override:
-#   trainer.n_gpus_per_node=2
-#   actor_rollout_ref.rollout.tensor_model_parallel_size=2
-#   actor_rollout_ref.actor.ulysses_sequence_parallel_size=2
-#   (and move experiments to remote fleet only)
 # ============================================================================
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -44,8 +38,8 @@ export TASK="data/autoresearch"
 export VLLM_USE_V1=1
 export PYTHONUNBUFFERED=1
 export RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES=1
-# Only GPU 0 for training; GPU 1 reserved for experiment dispatch
-export CUDA_VISIBLE_DEVICES=0
+# Both GPUs for training (TP=2); experiments on remote box2
+export CUDA_VISIBLE_DEVICES=0,1
 
 # Let vLLM auto-select attention backend
 unset VLLM_ATTENTION_BACKEND
@@ -97,8 +91,8 @@ echo "============================================"
 echo "  GRPO Baseline: Autoresearch"
 echo "  Experiment: $EXPERIMENT_NAME"
 echo "  Config: $CONFIG_NAME"
-echo "  Training GPU: 0 (TP=1, FSDP2 offload)"
-echo "  Experiment GPU: 1 (box6-gpu1)"
+echo "  Training GPUs: 0,1 (TP=2, FSDP2 offload)"
+echo "  Experiment GPU: box2-gpu0"
 echo "  Rollouts: n=4, batch=4, 16/step"
 echo "============================================"
 
