@@ -318,17 +318,10 @@ class AutoresearchAgentLoop(ToolAgentLoop):
         buffer = _get_buffer()
         known = buffer.find_by_code(modified)
         if known is not None:
-            reward = known["reward"]
-            if reward > 0:
-                feedback = (f"Changes from previous attempt:\n{feedback_diff}\n\n"
-                            f"val_bpb={known['val_bpb']:.6f} (reward={reward:.4f}).\n\n"
-                            "SUCCESS: These changes reduced validation loss. This is a good result. "
-                            "Repeat this approach and combine it with additional modifications to reduce validation loss further.")
-            else:
-                feedback = (f"Changes from previous attempt:\n{feedback_diff}\n\n"
-                            f"This code has already been evaluated: val_bpb={known['val_bpb']:.6f}.\n"
-                            "Try a different approach.")
-            return reward, feedback
+            feedback = (f"Changes from previous attempt:\n{feedback_diff}\n\n"
+                        f"This code has already been evaluated: val_bpb={known['val_bpb']:.6f}.\n"
+                        "Do not re-attempt this change.")
+            return known["reward"], feedback
 
         # Check experiment cache — only used to skip GPU dispatch, no feedback stored
         cached = self._cache.get(cache_diff, current_step=self._global_step)
