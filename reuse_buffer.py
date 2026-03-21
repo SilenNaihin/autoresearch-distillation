@@ -196,6 +196,14 @@ class ReuseBuffer:
             self._save()
             return results
 
+    def find_by_code(self, code: str) -> dict | None:
+        """Look up a state by its exact code. Returns state dict or None."""
+        with self._lock:
+            for state in self._data["states"].values():
+                if state["code"] == code:
+                    return dict(state)  # copy
+            return None
+
     def get_best_val_bpb(self) -> float:
         """Return minimum val_bpb across all states."""
         with self._lock:
