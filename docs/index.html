@@ -95,6 +95,7 @@
     .bar-value { padding-left: 12px; font-weight: 600; font-size: 0.95em; font-variant-numeric: tabular-nums; }
 
     .bar-fill.sdpo { background: linear-gradient(135deg, #2563eb, #3b82f6); }
+    .bar-fill.sdpo-ckpt { background: linear-gradient(135deg, #0891b2, #22d3ee); }
     .bar-fill.icl { background: linear-gradient(135deg, #6366f1, #818cf8); }
     .bar-fill.single { background: linear-gradient(135deg, #94a3b8, #cbd5e1); }
     .bar-fill.claude { background: linear-gradient(135deg, #d97706, #f59e0b); }
@@ -249,34 +250,58 @@
     </p>
 
     <!--
-      Scale: baseline=1.056, best=1.028 → max delta=0.028
-      Bar widths as % of max improvement (0.028):
-      Claude:  0.028/0.028 = 100%
-      SDPO:    0.028/0.028 = 100%
-      Single:  0.024/0.028 = 86%
-      ICL:     0.018/0.028 = 64%
+      Scale: baseline=1.056, best=1.023 → max delta=0.033
+      Bar widths as % of max improvement (0.033):
+      SDPO ckpt+ICL: 0.0328/0.033 = 100%
+      Claude:        0.028/0.033  = 85%
+      SDPO train:    0.028/0.033  = 85%
+      SDPO ckpt+ST:  0.0278/0.033 = 84%
+      Single-turn:   0.024/0.033  = 73%
+      ICL:           0.018/0.033  = 55%
     -->
     <div class="chart-container">
       <div class="bar-row">
         <div class="bar-label">
-          Claude
-          <small>Karpathy, H100</small>
+          SDPO Ckpt + ICL
+          <small>Qwen3-14B, best of 50</small>
         </div>
         <div class="bar-track">
-          <div class="bar-fill claude" style="width: 100%;"></div>
+          <div class="bar-fill sdpo-ckpt" style="width: 100%;"></div>
+        </div>
+        <div class="bar-value">&minus;3.1%</div>
+      </div>
+
+      <div class="bar-row">
+        <div class="bar-label">
+          Karpathy Agent
+          <small>Claude, 126 experiments</small>
+        </div>
+        <div class="bar-track">
+          <div class="bar-fill claude" style="width: 85%;"></div>
         </div>
         <div class="bar-value">&minus;2.8%</div>
       </div>
 
       <div class="bar-row">
         <div class="bar-label">
-          SDPO
-          <small>Qwen3-14B, ours</small>
+          SDPO (training)
+          <small>Qwen3-14B, best of 960</small>
         </div>
         <div class="bar-track">
-          <div class="bar-fill sdpo" style="width: 96%;"></div>
+          <div class="bar-fill sdpo" style="width: 85%;"></div>
         </div>
         <div class="bar-value">&minus;2.7%</div>
+      </div>
+
+      <div class="bar-row">
+        <div class="bar-label">
+          SDPO Ckpt + Single
+          <small>Qwen3-14B, best of 50</small>
+        </div>
+        <div class="bar-track">
+          <div class="bar-fill sdpo-ckpt" style="width: 84%;"></div>
+        </div>
+        <div class="bar-value">&minus;2.6%</div>
       </div>
 
       <div class="bar-row">
@@ -285,9 +310,20 @@
           <small>Qwen3-14B, best of 50</small>
         </div>
         <div class="bar-track">
-          <div class="bar-fill single" style="width: 86%;"></div>
+          <div class="bar-fill single" style="width: 73%;"></div>
         </div>
         <div class="bar-value">&minus;2.3%</div>
+      </div>
+
+      <div class="bar-row">
+        <div class="bar-label">
+          Claude Opus 4.6
+          <small>ICL, 19 turns</small>
+        </div>
+        <div class="bar-track">
+          <div class="bar-fill claude" style="width: 68%;"></div>
+        </div>
+        <div class="bar-value">&minus;2.1%</div>
       </div>
 
       <div class="bar-row">
@@ -296,7 +332,7 @@
           <small>Qwen3-14B, best of 50</small>
         </div>
         <div class="bar-track">
-          <div class="bar-fill icl" style="width: 64%;"></div>
+          <div class="bar-fill icl" style="width: 55%;"></div>
         </div>
         <div class="bar-value">&minus;1.7%</div>
       </div>
@@ -304,7 +340,7 @@
       <p class="chart-note">
         Claude result from <a href="https://github.com/karpathy/autoresearch/discussions/43">Karpathy's 126-experiment run</a>
         (0.998 &rarr; 0.970). Our baseline differs in absolute terms (1.056) due to platform setup;
-        relative improvements are comparable.
+        relative improvements are comparable. SDPO Ckpt runs use the trained checkpoint with frozen weights.
       </p>
     </div>
   </section>
@@ -514,22 +550,40 @@
         </thead>
         <tbody>
           <tr>
-            <td>Karpathy / Claude</td>
-            <td>Claude (frontier)</td>
+            <td><strong>SDPO ckpt + ICL (ours)</strong></td>
+            <td>Qwen3-14B-SDPO</td>
+            <td>50 turns (with feedback)</td>
+            <td class="best">&minus;3.1%</td>
+          </tr>
+          <tr>
+            <td>Karpathy Agent</td>
+            <td>Claude</td>
             <td>126</td>
             <td>&minus;2.8%</td>
           </tr>
           <tr>
-            <td><strong>SDPO (ours)</strong></td>
+            <td>SDPO training (ours)</td>
             <td>Qwen3-14B</td>
             <td>960 rollouts (60 steps &times; 16)</td>
-            <td class="best">&minus;2.7%</td>
+            <td>&minus;2.7%</td>
+          </tr>
+          <tr>
+            <td>SDPO ckpt + single (ours)</td>
+            <td>Qwen3-14B-SDPO</td>
+            <td>50 turns (no feedback)</td>
+            <td>&minus;2.6%</td>
           </tr>
           <tr>
             <td>Single-turn (ours)</td>
             <td>Qwen3-14B</td>
             <td>50 turns (no feedback)</td>
             <td>&minus;2.3%</td>
+          </tr>
+          <tr>
+            <td>Claude Opus 4.6 (ours)</td>
+            <td>Claude Opus 4.6</td>
+            <td>19 turns (with feedback)</td>
+            <td>&minus;2.1%</td>
           </tr>
           <tr>
             <td>ICL baseline (ours)</td>
