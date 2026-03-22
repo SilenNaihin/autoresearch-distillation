@@ -14,7 +14,6 @@ import argparse
 import json
 import os
 import re
-import shutil
 import subprocess
 import time
 from difflib import unified_diff
@@ -24,37 +23,120 @@ import wandb
 
 import litellm
 
-from bash_tool import create_isolated_workdir
 from environment import BASELINE_VAL_BPB, compute_reward, parse_metrics
 from experiment_cache import BASELINE_CACHE, ExperimentCache
 from runners import GPUSlot, SSHRunner
 
-BASH_TOOL_SCHEMA = {
-    "type": "function",
-    "function": {
-        "name": "bash",
-        "description": "Execute a bash command in the working directory containing train.py.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "command": {"type": "string", "description": "The bash command to run"}
-            },
-            "required": ["command"],
-        },
-    },
-}
+
+# ---------------------------------------------------------------------------
+# Sed command parsing (shared logic with loop_power_sampling.py)
+# ---------------------------------------------------------------------------
+
+def parse_sed_commands(text: str) -> list[str]:
+    """Extract unique sed commands from model output (preserves order)."""
+    seen = set()
+    commands = []
+    for line in text.splitlines():
+        line = line.strip()
+        for suffix in ["<|im_end|>", "<|endoftext|>", "```"]:
+            if line.endswith(suffix):
+                line = line[: -len(suffix)].rstrip()
+        if line.startswith("sed -i") and line not in seen:
+            seen.add(line)
+            commands.append(line)
+    return commands
+
+
+def _parse_sed_substitution(cmd: str) -> tuple[str, str, bool] | None:
+    """Parse a sed substitution command into (pattern, replacement, global)."""
+    m = re.match(r"sed\s+-i\s*(?:''|\"\")\s*'s(.)", cmd)
+    if not m:
+        m = re.match(r"sed\s+-i\s+'s(.)", cmd)
+    if not m:
+        return None
+    delim = m.group(1)
+    rest = cmd[m.end():]
+    parts = []
+    current = []
+    escaped = False
+    for ch in rest:
+        if escaped:
+            current.append(ch)
+            escaped = False
+        elif ch == '\\':
+            current.append(ch)
+            escaped = True
+        elif ch == delim:
+            parts.append("".join(current))
+            current = []
+        else:
+            current.append(ch)
+    parts.append("".join(current))
+    if len(parts) < 2:
+        return None
+    pattern = parts[0]
+    replacement = parts[1]
+    flags_str = parts[2] if len(parts) > 2 else ""
+    is_global = "g" in flags_str
+    return pattern, replacement, is_global
+
+
+def validate_sed_commands(baseline_py: str, commands: list[str]) -> list[str]:
+    """Filter sed commands to only those whose patterns match the baseline."""
+    valid = []
+    for cmd in commands:
+        if "train.py" not in cmd:
+            continue
+        parsed = _parse_sed_substitution(cmd)
+        if parsed is None:
+            continue
+        pattern, _replacement, _is_global = parsed
+        try:
+            if re.search(pattern, baseline_py):
+                valid.append(cmd)
+            else:
+                print(f"    SKIP (no match): {cmd}")
+        except re.error:
+            if pattern in baseline_py:
+                valid.append(cmd)
+            else:
+                print(f"    SKIP (no match): {cmd}")
+    return valid
+
+
+def apply_sed_commands(baseline_py: str, commands: list[str]) -> str:
+    """Apply sed substitution commands to train.py content using Python regex."""
+    content = baseline_py
+    for cmd in commands:
+        if "train.py" not in cmd:
+            continue
+        parsed = _parse_sed_substitution(cmd)
+        if parsed is None:
+            continue
+        pattern, replacement, is_global = parsed
+        try:
+            if is_global:
+                content = re.sub(pattern, replacement, content)
+            else:
+                content = re.sub(pattern, replacement, content, count=1)
+        except re.error:
+            if is_global:
+                content = content.replace(pattern, replacement)
+            else:
+                content = content.replace(pattern, replacement, 1)
+    return content
 
 
 def run_single_generation(
-    workdir: str,
+    baseline_py: str,
     model_name: str,
     system_prompt: str,
     instance_prompt: str,
     provider_kwargs: dict,
-) -> tuple[str, list[dict]]:
-    """Single-shot: one LLM call with bash tool, execute all tool calls, read result.
+) -> tuple[str, list[dict], list[str]]:
+    """Single-shot: one LLM call, parse sed commands from text, apply in Python.
 
-    Returns (modified_train_py, trajectory).
+    Returns (modified_train_py, trajectory, sed_commands).
     """
     messages = [
         {"role": "system", "content": system_prompt},
@@ -64,43 +146,20 @@ def run_single_generation(
     response = litellm.completion(
         model=model_name,
         messages=messages,
-        tools=[BASH_TOOL_SCHEMA],
         **provider_kwargs,
     )
 
     choice = response.choices[0]
     content = choice.message.content or ""
-    tool_calls = choice.message.tool_calls or []
 
-    trajectory = [{"role": "assistant", "content": content, "tool_calls": len(tool_calls)}]
+    trajectory = [{"role": "assistant", "content": content}]
 
-    # Execute all tool calls in the workdir
-    env = os.environ.copy()
-    env.update({"PAGER": "cat", "TQDM_DISABLE": "1"})
+    # Parse and apply sed commands from the response text
+    sed_commands = parse_sed_commands(content)
+    sed_commands = validate_sed_commands(baseline_py, sed_commands)
+    modified = apply_sed_commands(baseline_py, sed_commands)
 
-    for tc in tool_calls:
-        try:
-            args = json.loads(tc.function.arguments) if isinstance(tc.function.arguments, str) else tc.function.arguments
-            cmd = args.get("command", "")
-        except (json.JSONDecodeError, AttributeError):
-            continue
-        if not cmd:
-            continue
-        try:
-            result = subprocess.run(
-                cmd, shell=True, capture_output=True, text=True,
-                cwd=workdir, env=env, timeout=30,
-            )
-            trajectory.append({
-                "role": "tool", "command": cmd,
-                "stdout": result.stdout[:500], "stderr": result.stderr[:500],
-                "returncode": result.returncode,
-            })
-        except subprocess.TimeoutExpired:
-            trajectory.append({"role": "tool", "command": cmd, "error": "timeout"})
-
-    modified = Path(os.path.join(workdir, "train.py")).read_text()
-    return modified, trajectory
+    return modified, trajectory, sed_commands
 
 # Baseline-specific system prompt (separate from SDPO's prompts.py).
 BASELINE_SYSTEM_PROMPT = """\
@@ -130,17 +189,17 @@ Violating this triggers an assertion error.
 in the same time may outperform a larger model that trains fewer steps.
 
 ## How to edit
-Read the full file — optimizer internals, model architecture, training loop — to find all \
-the levers. Think step-by-step about what changes could lower val_bpb.
-Make targeted edits to train.py using sed. Do not rewrite the entire file. Example:
-   <tool_call>
-   {"name": "bash", "arguments": {"command": "sed -i 's/OLD_VALUE/NEW_VALUE/' train.py"}}
-   </tool_call>
-Make all your changes in a single response. We run uv run train.py on a GPU after.
+The full train.py is provided below. Study the optimizer internals, model architecture, \
+and training loop to find all the levers. Think step-by-step about what changes could lower val_bpb.
+Then output your changes as sed commands, one per line. Do not rewrite the entire file. Example:
+
+sed -i 's/learning_rate = 0.001/learning_rate = 0.0005/' train.py
+sed -i 's/depth = 8/depth = 12/' train.py
 
 ## Important
 - You are ONLY editing the file. You do NOT run experiments.
-- Think carefully about what will improve training, then make correct edits.\
+- The full train.py is already provided — do not ask to read it.
+- Think carefully about what will improve training, then output correct sed commands.\
 """
 
 # Experiments run on h100-dev-box-2 via self-SSH (localhost).
@@ -455,6 +514,8 @@ def main():
     parser.add_argument("--provider", type=str, default="vllm",
                         choices=["vllm", "bedrock"],
                         help="LLM provider: vllm (local/remote vLLM) or bedrock (AWS)")
+    parser.add_argument("--resume", type=str, default=None,
+                        help="Resume from a previous JSONL file (loads turn_results and best_val_bpb)")
     args = parser.parse_args()
 
     # Override experiment fleet if --experiment-host is set
@@ -514,6 +575,35 @@ def main():
     # Multi-turn loop
     best_val_bpb = float("inf")
     turn_results: list[dict] = []
+    start_turn = 0
+
+    # Resume from previous JSONL if provided
+    if args.resume:
+        with open(args.resume) as f:
+            for line in f:
+                entry = json.loads(line)
+                if "config" in entry:
+                    continue
+                # Skip errors/generation_errors — only keep real results
+                status = entry.get("status", "")
+                if status in ("generation_error", "agent_error"):
+                    continue
+                turn_results.append({
+                    "turn": entry.get("turn", len(turn_results)),
+                    "val_bpb": entry.get("val_bpb"),
+                    "diff": entry.get("diff", ""),
+                    "status": status,
+                    "crash_reason": entry.get("crash_reason", ""),
+                    "depth": entry.get("depth"),
+                    "tokens_M": entry.get("tokens_M"),
+                    "memory_gb": entry.get("memory_gb"),
+                })
+                v = entry.get("val_bpb")
+                if v is not None and v < best_val_bpb:
+                    best_val_bpb = v
+        start_turn = len(turn_results)
+        print(f"Resumed from {args.resume}: {start_turn} turns, best={best_val_bpb}")
+
     cache_sync_host = args.cache_sync_host
     if cache_sync_host:
         sync_cache(cache_sync_host, BASELINE_CACHE, "pull")
@@ -522,7 +612,7 @@ def main():
     cumulative_crashes = 0
     cumulative_successes = 0
 
-    for turn in range(args.max_turns):
+    for turn in range(start_turn, start_turn + args.max_turns):
         t0 = time.time()
         # Sync cache from remote before checking for duplicates
         if cache_sync_host:
@@ -539,12 +629,11 @@ def main():
             if feedback_block:
                 instance_prompt += "\n\n" + feedback_block
 
-        # Single-shot generation: one LLM call, execute tool calls, read result
-        workdir = create_isolated_workdir()
+        # Single-shot generation: one LLM call, parse sed commands, apply in Python
         agent_t0 = time.time()
         try:
-            modified, trajectory = run_single_generation(
-                workdir=workdir,
+            modified, trajectory, sed_commands = run_single_generation(
+                baseline_py=baseline,
                 model_name=litellm_model,
                 system_prompt=BASELINE_SYSTEM_PROMPT,
                 instance_prompt=instance_prompt,
@@ -573,27 +662,23 @@ def main():
                 "experiment_time": time.time() - t0,
                 "prompt_len": len(instance_prompt),
             })
-            shutil.rmtree(workdir, ignore_errors=True)
             continue
-        finally:
-            shutil.rmtree(workdir, ignore_errors=True)
 
         agent_time = time.time() - agent_t0
         experiment_stdout = ""  # populated after dispatch
 
         diff_text = make_diff(baseline, modified)
-        tool_msgs = [m for m in trajectory if m.get("role") == "tool"]
-        n_tool_calls = len(tool_msgs)
+        n_tool_calls = len(sed_commands)
         trajectory_len = len(trajectory)
-        used_search = any("search.py" in m.get("command", "") for m in tool_msgs)
+        used_search = False
         diff_size = len(diff_text)
 
         model_thinking = extract_model_thinking(trajectory)
-        num_sed = count_sed_commands(trajectory)
+        num_sed = len(sed_commands)
 
-        print(f"  Tool calls: {n_tool_calls}")
-        print(f"  Diff size:  {diff_size} chars")
-        print(f"  Agent time: {agent_time:.1f}s  Trajectory: {trajectory_len} msgs  Search: {used_search}")
+        print(f"  Sed commands: {num_sed}")
+        print(f"  Diff size:    {diff_size} chars")
+        print(f"  Gen time:     {agent_time:.1f}s")
 
         if baseline == modified:
             print(f"  Status: no_changes")

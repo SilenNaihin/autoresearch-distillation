@@ -87,19 +87,58 @@ def _chat_generate(
     if extra_body:
         kwargs["extra_body"] = extra_body
 
-    response = client.chat.completions.create(**kwargs)
-    choice = response.choices[0]
-
-    if choice.logprobs is None or not choice.logprobs.content:
-        return [], [], []
-
-    tokens = [item.token for item in choice.logprobs.content]
-    lps = [item.logprob for item in choice.logprobs.content]
-    top_lps = [
-        [t.logprob for t in item.top_logprobs]
-        for item in choice.logprobs.content
-    ]
-    return tokens, lps, top_lps
+    import subprocess, json as _json
+    hard_timeout = 900  # 15 min hard wall-clock limit per attempt
+    for attempt in range(5):
+        try:
+            # Use subprocess to guarantee clean timeout — no zombie threads/connections.
+            # The child process makes the API call and prints JSON result to stdout.
+            script = f"""
+import json, sys
+from openai import OpenAI
+import httpx
+client = OpenAI(
+    base_url="{client.base_url}",
+    api_key="dummy",
+    timeout=httpx.Timeout(connect=60, read=600, write=60, pool=60),
+)
+resp = client.chat.completions.create(**json.loads(sys.stdin.read()))
+# Extract what we need
+items = resp.choices[0].logprobs.content if resp.choices[0].logprobs else []
+result = {{
+    "tokens": [it.token for it in items],
+    "logprobs": [it.logprob for it in items],
+    "top_logprobs": [[t.logprob for t in it.top_logprobs] for it in items],
+}}
+print(json.dumps(result))
+"""
+            proc = subprocess.run(
+                ["python3", "-c", script],
+                input=_json.dumps(kwargs),
+                capture_output=True, text=True, timeout=hard_timeout,
+            )
+            if proc.returncode != 0:
+                raise RuntimeError(f"subprocess failed: {proc.stderr[-500:]}")
+            data = _json.loads(proc.stdout)
+            tokens = data["tokens"]
+            lps = data["logprobs"]
+            top_lps = data["top_logprobs"]
+            return tokens, lps, top_lps
+        except subprocess.TimeoutExpired:
+            if attempt < 4:
+                wait = 10 * (attempt + 1)
+                print(f"    _chat_generate attempt {attempt+1} hard timeout ({hard_timeout}s); retrying in {wait}s", flush=True)
+                time.sleep(wait)
+            else:
+                raise TimeoutError(f"_chat_generate failed after {attempt+1} attempts (hard timeout)")
+        except Exception as exc:
+            if attempt < 4:
+                wait = 10 * (attempt + 1)
+                print(f"    _chat_generate attempt {attempt+1} failed: {exc}; retrying in {wait}s", flush=True)
+                time.sleep(wait)
+            else:
+                raise
+    return [], [], []
 
 
 def _approx_log_q(log_p_token: float, top_base_lps: list[float], temperature: float) -> float:
