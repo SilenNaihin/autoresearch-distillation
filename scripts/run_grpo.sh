@@ -101,7 +101,7 @@ echo "  Config: $CONFIG_NAME"
 echo "  Training GPUs: 0,1 (TP=2, FSDP2 offload)"
 echo "  Experiment GPU: box2-gpu0"
 echo "  Rollouts: n=4, batch=4, 16/step"
-echo "  Entropy coeff: 0.02, norm_adv: True, PUCT c=1.0"
+echo "  KL loss: coef=0.001, PUCT c=1.0"
 echo "============================================"
 
 # Shift past the experiment name if provided
