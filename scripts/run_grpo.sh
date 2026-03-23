@@ -74,6 +74,13 @@ for p in glob.glob(os.path.expanduser('~/.cache/huggingface/hub/models--Qwen--Qw
         print(f'Context config already set in {real}')
 "
 
+# Seed /data/cache with repo-committed cache (merged from all prior runs)
+mkdir -p /data/cache
+if [ -f "$PROJECT_ROOT/cache/all.json" ]; then
+    cp -n "$PROJECT_ROOT/cache/all.json" /data/cache/all.json 2>/dev/null || true
+    echo "Seeded experiment cache from repo ($(python3 -c "import json; d=json.load(open('/data/cache/all.json')); print(len(d.get('diffs',d)))" 2>/dev/null || echo '?') entries)"
+fi
+
 # Copy configs into SDPO's config directory so Hydra can find them
 cp "$PROJECT_ROOT/configs/autoresearch_grpo.yaml" \
    "$SDPO_ROOT/verl/trainer/config/autoresearch_grpo.yaml"
@@ -88,12 +95,13 @@ export PATH="$HOME/.local/bin:$PATH"
 cd "$SDPO_ROOT"
 
 echo "============================================"
-echo "  GRPO Baseline: Autoresearch"
+echo "  GRPO+MCTS: Autoresearch"
 echo "  Experiment: $EXPERIMENT_NAME"
 echo "  Config: $CONFIG_NAME"
 echo "  Training GPUs: 0,1 (TP=2, FSDP2 offload)"
 echo "  Experiment GPU: box2-gpu0"
 echo "  Rollouts: n=4, batch=4, 16/step"
+echo "  Entropy coeff: 0.02, norm_adv: True, PUCT c=1.0"
 echo "============================================"
 
 # Shift past the experiment name if provided

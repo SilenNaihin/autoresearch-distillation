@@ -1,22 +1,20 @@
 """
-Custom agent loop for autoresearch GRPO baseline with multi-turn bash tool.
-
-Simplified version of agent_loop.py (SDPO) that removes:
-- Reuse buffer (PUCT tree search) — always starts from baseline train.py
-- Feedback pipeline — no teacher reprompting, no self-distillation
-- Parent tracking — no state tree
+Custom agent loop for autoresearch GRPO with multi-turn bash tool + PUCT reuse buffer.
 
 Each rollout:
-  1. Model receives prompt (baseline train.py from dataset)
-  2. Model uses bash tool to read/edit train.py (multi-turn)
-  3. Model submits via: echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT
-  4. We read modified train.py from the isolated workdir
-  5. We dispatch to GRPO experiment fleet (box6-gpu1)
-  6. We parse metrics, compute reward
-  7. reward_score is set on AgentLoopOutput for RL training
+  1. PUCT selects a parent state (train.py version) from the reuse buffer
+  2. Model receives prompt with selected train.py
+  3. Model uses bash tool to read/edit train.py (multi-turn)
+  4. Model submits via: echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT
+  5. We read modified train.py from the isolated workdir
+  6. We dispatch to GPU fleet (box2)
+  7. We parse metrics, compute reward
+  8. Successful experiments are added back to the reuse buffer
+  9. reward_score is set on AgentLoopOutput for RL training
 
 GRPO computes advantages from within-group comparison of rewards (n=4).
-No self-distillation, no teacher EMA, no feedback reprompting.
+PUCT reuse buffer steers exploration toward promising states.
+Entropy bonus prevents policy collapse.
 """
 
 import asyncio
@@ -30,6 +28,7 @@ from pathlib import Path
 from typing import Any
 
 from experiment_cache import GRPO_CACHE, ExperimentCache
+from reuse_buffer import ReuseBuffer
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "SDPO"))
 
@@ -43,7 +42,7 @@ logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "WARN"))
 
 
 # ---------------------------------------------------------------------------
-# GRPO experiment fleet (dedicated — does not share with SDPO)
+# GRPO experiment fleet
 # ---------------------------------------------------------------------------
 
 from runners import GPUSlot, GPUPoolRunner
@@ -77,21 +76,40 @@ def _get_pool():
 
 
 # ---------------------------------------------------------------------------
+# Shared reuse buffer (singleton, thread-safe)
+# ---------------------------------------------------------------------------
+
+_buffer = None
+_buffer_lock = threading.Lock()
+_buffer_kwargs: dict = {}
+
+
+def _get_buffer() -> ReuseBuffer:
+    global _buffer
+    if _buffer is None:
+        with _buffer_lock:
+            if _buffer is None:
+                _buffer = ReuseBuffer(Path("/data/reuse_buffer_grpo.json"), **_buffer_kwargs)
+    return _buffer
+
+
+# ---------------------------------------------------------------------------
 # Agent loop
 # ---------------------------------------------------------------------------
 
 @register("autoresearch_grpo_agent")
 class GRPOAgentLoop(ToolAgentLoop):
-    """Multi-turn agent loop for GRPO baseline.
+    """Multi-turn agent loop for GRPO with PUCT reuse buffer.
 
-    Simpler than AutoresearchAgentLoop (SDPO):
-    - No reuse buffer — always starts from baseline train.py in the prompt
-    - No feedback pipeline — reward comes purely from group comparison
-    - Experiment cache still used to avoid redundant GPU dispatches
+    Like SDPO's AutoresearchAgentLoop but without self-distillation or feedback.
+    PUCT steers exploration; entropy bonus prevents policy collapse.
     """
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, c_puct: float = 1.0, max_states: int = 1000, **kwargs):
         super().__init__(*args, **kwargs)
+        global _buffer_kwargs
+        _buffer_kwargs = {"c_puct": c_puct, "max_states": max_states}
+
         self._sed_failed: str | None = None
         self._cache = ExperimentCache(write_path=GRPO_CACHE)
 
@@ -107,16 +125,48 @@ class GRPOAgentLoop(ToolAgentLoop):
         self._noop_tool_calls = 0
         self._sed_failed = None
 
-        # Read baseline train.py for diff comparison
+        # Select a state from the reuse buffer
+        from prompts import replace_train_py_in_prompt
+        from environment import BASELINE_VAL_BPB
+
+        buffer = _get_buffer()
         bash_tool = self.tools.get("bash")
-        self._baseline_code = ""
-        if bash_tool:
-            self._baseline_code = Path(bash_tool.autoresearch_dir, "train.py").read_text()
+
+        # Seed with baseline train.py if buffer is empty
+        if bash_tool and len(buffer) == 0:
+            baseline_code = Path(bash_tool.autoresearch_dir, "train.py").read_text()
+            buffer.seed(baseline_code, BASELINE_VAL_BPB)
+
+        # Store original baseline for cache keying
+        self._baseline_code = buffer._data["states"].get("0", {}).get("code", "")
+
+        # PUCT selection
+        selections = buffer.select(1)
+        if selections:
+            self._parent_id, self._selected_code = selections[0]
+        else:
+            self._parent_id = 0
+            self._selected_code = Path(bash_tool.autoresearch_dir, "train.py").read_text() if bash_tool else ""
+
+        # Replace train.py in prompt with the selected state's code
+        if "raw_prompt" in kwargs:
+            kwargs["raw_prompt"] = list(kwargs["raw_prompt"])
+            last_msg = dict(kwargs["raw_prompt"][-1])
+            last_msg["content"] = replace_train_py_in_prompt(last_msg["content"], self._selected_code)
+            # Append best val_bpb target
+            best_bpb = buffer.get_best_val_bpb()
+            if best_bpb < BASELINE_VAL_BPB:
+                last_msg["content"] += f"\n\n## Best val_bpb achieved so far: {best_bpb:.6f} (baseline={BASELINE_VAL_BPB})"
+            kwargs["raw_prompt"][-1] = last_msg
 
         # Pre-create persistent bash tool instance
         instance_id = None
         if bash_tool:
             instance_id, _ = await bash_tool.create()
+            # Overwrite workdir train.py with the selected state's code
+            workdir = bash_tool.get_workdir(instance_id)
+            if workdir and self._selected_code:
+                Path(workdir, "train.py").write_text(self._selected_code)
             kwargs.setdefault("tools_kwargs", {})
             kwargs["tools_kwargs"]["_bash_instance_id"] = instance_id
 
@@ -132,7 +182,9 @@ class GRPOAgentLoop(ToolAgentLoop):
                       "mfu_percent", "total_tokens_M", "num_steps", "num_params_M", "depth"):
                 env_metrics[f"env_{k}"] = float(getattr(self, '_last_env_metrics', {}).get(k, float('nan')))
             env_metrics["env_novel"] = self._is_novel
-            output.extra_fields["reward_extra_info"] = {"feedback": feedback, **env_metrics}
+            output.extra_fields["reward_extra_info"] = {
+                "feedback": feedback, "parent_id": int(self._parent_id), **env_metrics
+            }
 
             return output
         finally:
@@ -215,19 +267,39 @@ class GRPOAgentLoop(ToolAgentLoop):
         if modified is None:
             return 0.0, "No modified train.py found."
 
-        diff_text = _make_diff(self._baseline_code, modified)
+        # Two diffs: cache_diff keys on original baseline, feedback_diff shows changes from selected parent
+        cache_diff = _make_diff(self._baseline_code, modified)
+        feedback_diff = _make_diff(self._selected_code, modified)
 
         from environment import BASELINE_VAL_BPB, compute_reward, parse_metrics
 
-        if self._baseline_code == modified:
+        if self._selected_code == modified:
             if self._sed_failed:
                 return 0.0, f"FAILURE: your sed command failed: {self._sed_failed}"
             return 0.0, "No changes were made to train.py."
 
+        # Check reuse buffer — if this exact code is already a known state, skip GPU
+        buffer = _get_buffer()
+        known = buffer.find_by_code(modified)
+        if known is not None:
+            return known["reward"], f"This code has already been evaluated: val_bpb={known['val_bpb']:.6f}."
+
         # Check experiment cache
-        cached = self._cache.get(diff_text, current_step=self._global_step)
+        cached = self._cache.get(cache_diff, current_step=self._global_step)
         if cached is not None:
-            return cached["reward"], cached["feedback"]
+            if cached.get("crashed"):
+                tail = cached.get("tail", cached.get("feedback", "unknown error"))
+                return 0.0, f"These changes caused the experiment to crash:\n{tail}"
+            # Handle both old format (reward/feedback) and new format (val_bpb/metrics_line)
+            val_bpb = cached.get("val_bpb")
+            if val_bpb is not None:
+                reward, status, reward_feedback = compute_reward(val_bpb)
+                metrics_line = cached.get("metrics_line", "")
+                if reward > 0 and buffer.find_by_code(modified) is None:
+                    buffer.add(modified, val_bpb, reward, self._parent_id)
+                return reward, f"{reward_feedback}\n{metrics_line}"
+            # Old GRPO cache format: has reward + feedback directly
+            return cached.get("reward", 0.0), cached.get("feedback", "")
 
         # Dispatch to GPU fleet
         self._is_novel = 1.0
@@ -246,7 +318,7 @@ class GRPOAgentLoop(ToolAgentLoop):
             crash_info = "\n".join(parts) if parts else "no output"
             feedback = f"Experiment crashed (exit {output.returncode}):\n{crash_info}"
             if "CUDA out of memory" in crash_info:
-                self._cache.put(diff_text, {"reward": 0.0, "feedback": feedback, "crashed": True}, step=self._global_step)
+                self._cache.put(cache_diff, {"crashed": True, "tail": crash_info}, step=self._global_step)
             return 0.0, feedback
 
         val_bpb = metrics.get("val_bpb")
@@ -262,6 +334,12 @@ class GRPOAgentLoop(ToolAgentLoop):
         )
         feedback = f"{reward_feedback}\n{metrics_line}"
 
-        self._cache.put(diff_text, {"reward": reward, "feedback": feedback},
-                        step=self._global_step, val_bpb=val_bpb, diff_text_raw=diff_text)
+        # Cache for future dedup
+        self._cache.put(cache_diff, {"val_bpb": val_bpb, "metrics_line": metrics_line},
+                        step=self._global_step, val_bpb=val_bpb, diff_text_raw=cache_diff)
+
+        # Add successful experiments to reuse buffer
+        if reward > 0:
+            buffer.add(modified, val_bpb, reward, self._parent_id)
+
         return reward, feedback

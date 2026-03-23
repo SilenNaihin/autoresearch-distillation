@@ -32,6 +32,10 @@ BASELINE_CACHE = CACHE_DIR / "baseline.json"
 SDPO_CACHE = CACHE_DIR / "sdpo.json"
 GRPO_CACHE = CACHE_DIR / "grpo.json"
 
+# Repo-committed merged cache from all previous runs (read-only seed)
+_REPO_DIR = Path(__file__).resolve().parent
+SEED_CACHE = _REPO_DIR / "cache" / "all.json"
+
 FLOCK_TIMEOUT = 60  # seconds
 
 
@@ -58,7 +62,7 @@ class ExperimentCache:
 
     def __init__(self, write_path: Path, read_paths: list[Path] | None = None):
         self._write_path = write_path
-        self._read_paths = read_paths or [BASELINE_CACHE, SDPO_CACHE, GRPO_CACHE]
+        self._read_paths = read_paths or [SEED_CACHE, BASELINE_CACHE, SDPO_CACHE, GRPO_CACHE]
         self._lock = threading.Lock()
         self._cache: dict[str, dict] = {}
         self._best_val_bpb: float = 1e9

@@ -1,5 +1,5 @@
-# GRPO baseline config for autoresearch on box6 (2 GPU training TP=2, experiments on box2)
-# Mirrors SDPO config but without self-distillation, reuse buffer, or feedback pipeline.
+# GRPO+MCTS config for autoresearch on box6 (2 GPU training TP=2, experiments on box2)
+# GRPO with entropy bonus + PUCT reuse buffer for exploration.
 # Usage: bash scripts/run_grpo.sh
 
 defaults:
@@ -37,6 +37,8 @@ actor_rollout_ref:
       strategy: fsdp2
       offload_policy: true
       ulysses_sequence_parallel_size: 2
+    entropy_coeff: 0.02
+    calculate_entropy: true
     optim:
       lr: 5e-6
       lr_warmup_steps: 5
@@ -72,7 +74,7 @@ actor_rollout_ref:
 
 algorithm:
   adv_estimator: grpo
-  norm_adv_by_std_in_grpo: False
+  norm_adv_by_std_in_grpo: True
   use_kl_in_reward: False
   rollout_correction:
     rollout_is: token
@@ -86,7 +88,7 @@ reward_model:
 
 trainer:
   project_name: autoresearch-grpo
-  experiment_name: qwen3-14b-grpo
+  experiment_name: qwen3-14b-grpo-mcts
   n_gpus_per_node: 2
   nnodes: 1
   total_epochs: 15

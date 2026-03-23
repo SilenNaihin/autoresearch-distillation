@@ -1,3 +1,5 @@
 - name: autoresearch_grpo_agent
   _target_: agent_loop_grpo.GRPOAgentLoop
   _recursive_: false
+  c_puct: 1.0
+  max_states: 1000
