@@ -1,13 +1,15 @@
 """
-Single-shot baseline: one LLM generation per turn, no agent loop.
+Baseline loop: single-shot sed or multi-turn agent editing.
 
-Each turn: one LLM call with bash tool → execute tool calls → dispatch experiment.
-ICL mode feeds back previous results; single-turn mode has no feedback.
-No mini-swe-agent, no multi-step agent loop — just symbolic tool use.
+Two modes:
+  --mode sed    (default) One LLM call, parse sed commands from text, apply in Python.
+  --mode agent  Multi-turn mini-swe-agent loop with bash tool calls.
 
+ICL mode feeds back previous results; --single-turn has no feedback.
 Supports vLLM (local/remote) and Bedrock (Claude) via litellm.
 
-    python loop_baseline.py --max-turns 50 --run-name my-run --experiment-host h100-dev-box-2
+    python loop_baseline.py --max-turns 50 --mode sed --run-name my-run
+    python loop_baseline.py --max-turns 50 --mode agent --step-limit 5 --run-name my-run
 """
 
 import argparse
@@ -21,8 +23,11 @@ from pathlib import Path
 
 import wandb
 
+import shutil
+
 import litellm
 
+from bash_tool import create_isolated_workdir, run_agent_episode
 from environment import BASELINE_VAL_BPB, compute_reward, parse_metrics
 from experiment_cache import BASELINE_CACHE, ExperimentCache
 from runners import GPUSlot, SSHRunner
@@ -200,6 +205,47 @@ sed -i 's/depth = 8/depth = 12/' train.py
 - You are ONLY editing the file. You do NOT run experiments.
 - The full train.py is already provided — do not ask to read it.
 - Think carefully about what will improve training, then output correct sed commands.\
+"""
+
+AGENT_SYSTEM_PROMPT = """\
+You are an autonomous ML researcher optimizing a GPT pretraining script.
+
+## Your task
+Modify train.py to lower val_bpb (bits per byte on validation data).
+The training budget is fixed at 5 minutes wall-clock. Lower val_bpb is better.
+
+## Rules
+- You may ONLY modify train.py. Do not touch prepare.py or any other file.
+- You can only use packages already in pyproject.toml: torch, numpy, kernels, matplotlib, \
+pandas, pyarrow, requests, rustbpe, tiktoken.
+- Do not modify the evaluation harness. The evaluate_bpb function in prepare.py is the ground truth.
+- VRAM is a soft constraint. Some increase is OK for meaningful val_bpb gains.
+
+## Hardware constraints
+- The experiment GPU has 93 GB VRAM (H100 SXM). The default config uses ~45 GB at depth=8.
+- VRAM scales with model size. If you increase depth or width, you may need to reduce \
+DEVICE_BATCH_SIZE to compensate. Check that your changes fit in ~85 GB.
+- FlashAttention 3 (Hopper) requires head_dim to be a power of 2 (64, 128, 256). Other values crash.
+- TOTAL_BATCH_SIZE must be divisible by (DEVICE_BATCH_SIZE * sequence_length). \
+Violating this triggers an assertion error.
+
+## Tips
+- The training budget is fixed at 5 minutes. A configuration that processes more training steps \
+in the same time may outperform a larger model that trains fewer steps.
+
+## Workflow
+1. Read the full file — optimizer internals, model architecture, training loop — to find all \
+the levers. Think step-by-step about what changes could lower val_bpb.
+2. Make targeted edits to train.py using sed. Do not rewrite the entire file. Example:
+   <tool_call>
+   {"name": "bash", "arguments": {"command": "sed -i 's/OLD_VALUE/NEW_VALUE/' train.py"}}
+   </tool_call>
+3. When complete, submit: echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT
+
+## Important
+- You are ONLY editing the file. You do NOT run experiments.
+- We will run uv run train.py on a GPU after you submit.
+- Think carefully about what will improve training, then make correct edits.\
 """
 
 # Experiments run on h100-dev-box-2 via self-SSH (localhost).
@@ -514,6 +560,13 @@ def main():
     parser.add_argument("--provider", type=str, default="vllm",
                         choices=["vllm", "bedrock"],
                         help="LLM provider: vllm (local/remote vLLM) or bedrock (AWS)")
+    parser.add_argument("--mode", type=str, default="sed",
+                        choices=["sed", "agent"],
+                        help="sed: single-shot text parsing; agent: mini-swe-agent loop")
+    parser.add_argument("--step-limit", type=int, default=5,
+                        help="Max bash tool calls per episode (agent mode only)")
+    parser.add_argument("--verl-compat", action="store_true",
+                        help="Treat no-tool-call as submission (agent mode, for VERL-trained models)")
     parser.add_argument("--resume", type=str, default=None,
                         help="Resume from a previous JSONL file (loads turn_results and best_val_bpb)")
     args = parser.parse_args()
@@ -542,10 +595,35 @@ def main():
             "temperature": args.temperature,
         }
 
+    # Create mini-swe-agent model for agent mode
+    swe_model = None
+    if args.mode == "agent":
+        from minisweagent.models.litellm_model import LitellmModel
+        if args.provider == "bedrock":
+            swe_model = LitellmModel(
+                model_name=f"bedrock/{args.model}",
+                model_kwargs={"temperature": args.temperature},
+                cost_tracking="ignore_errors",
+            )
+        else:
+            swe_model = LitellmModel(
+                model_name=f"openai/{args.model}",
+                model_kwargs={
+                    "api_base": args.vllm_base_url,
+                    "api_key": "dummy",
+                    "temperature": args.temperature,
+                },
+                cost_tracking="ignore_errors",
+            )
+
     print(f"Model:       {litellm_model}")
+    print(f"Mode:        {args.mode}")
     print(f"Max turns:   {args.max_turns}")
     print(f"Temperature: {args.temperature}")
     print(f"Single-turn: {args.single_turn}")
+    if args.mode == "agent":
+        print(f"Step limit:  {args.step_limit}")
+        print(f"VERL compat: {args.verl_compat}")
     print(f"Fleet:       {[s.name for s in EXPERIMENT_FLEET]}")
     print(f"Output:      {output_path}")
     print()
@@ -553,14 +631,14 @@ def main():
     # Init wandb
     config = {
         "model": args.model,
+        "mode": args.mode,
         "max_turns": args.max_turns,
         "temperature": args.temperature,
         "single_turn": args.single_turn,
         "seed": args.seed,
         "fleet": [s.name for s in EXPERIMENT_FLEET],
         "baseline_val_bpb": BASELINE_VAL_BPB,
-        "method": "single-turn sampling (no feedback)" if args.single_turn
-                  else "ICL (no weight updates)",
+        "method": f"{args.mode} / {'single-turn' if args.single_turn else 'ICL'}",
     }
     wandb.init(project="autoresearch-baseline", name=args.run_name, config=config)
     log_jsonl(output_path, {"config": config})
@@ -629,16 +707,32 @@ def main():
             if feedback_block:
                 instance_prompt += "\n\n" + feedback_block
 
-        # Single-shot generation: one LLM call, parse sed commands, apply in Python
+        # Generate edits: sed mode (single-shot text) or agent mode (mini-swe-agent)
         agent_t0 = time.time()
         try:
-            modified, trajectory, sed_commands = run_single_generation(
-                baseline_py=baseline,
-                model_name=litellm_model,
-                system_prompt=BASELINE_SYSTEM_PROMPT,
-                instance_prompt=instance_prompt,
-                provider_kwargs=provider_kwargs,
-            )
+            if args.mode == "agent":
+                sys_prompt = AGENT_SYSTEM_PROMPT
+                workdir = create_isolated_workdir()
+                try:
+                    modified, trajectory = run_agent_episode(
+                        workdir=workdir,
+                        model=swe_model,
+                        system_prompt=sys_prompt,
+                        instance_prompt=instance_prompt,
+                        step_limit=args.step_limit,
+                        verl_compat=args.verl_compat,
+                    )
+                finally:
+                    shutil.rmtree(workdir, ignore_errors=True)
+                sed_commands = []  # not applicable for agent mode
+            else:
+                modified, trajectory, sed_commands = run_single_generation(
+                    baseline_py=baseline,
+                    model_name=litellm_model,
+                    system_prompt=BASELINE_SYSTEM_PROMPT,
+                    instance_prompt=instance_prompt,
+                    provider_kwargs=provider_kwargs,
+                )
         except Exception as e:
             import traceback
             tb = traceback.format_exc()
@@ -668,17 +762,28 @@ def main():
         experiment_stdout = ""  # populated after dispatch
 
         diff_text = make_diff(baseline, modified)
-        n_tool_calls = len(sed_commands)
         trajectory_len = len(trajectory)
-        used_search = False
         diff_size = len(diff_text)
-
         model_thinking = extract_model_thinking(trajectory)
-        num_sed = len(sed_commands)
 
-        print(f"  Sed commands: {num_sed}")
-        print(f"  Diff size:    {diff_size} chars")
-        print(f"  Gen time:     {agent_time:.1f}s")
+        if args.mode == "agent":
+            n_tool_calls = sum(1 for m in trajectory if m.get("role") == "assistant"
+                              and "tool_calls" in str(m.get("content", "")))
+            used_search = any(
+                "search.py" in str(a.get("command", ""))
+                for m in trajectory
+                for a in (m.get("extra", {}) or {}).get("actions", [])
+                if isinstance(a, dict)
+            )
+            num_sed = count_sed_commands(trajectory)
+        else:
+            n_tool_calls = len(sed_commands)
+            used_search = False
+            num_sed = len(sed_commands)
+
+        print(f"  Tool calls: {n_tool_calls}  Sed: {num_sed}")
+        print(f"  Diff size:  {diff_size} chars")
+        print(f"  Gen time:   {agent_time:.1f}s  Trajectory: {trajectory_len} msgs")
 
         if baseline == modified:
             print(f"  Status: no_changes")
