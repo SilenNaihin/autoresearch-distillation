@@ -216,7 +216,7 @@
       <a href="https://wandb.ai/silennai-endflow/autoresearch-sdpo">W&amp;B (SDPO)</a>
       <a href="https://wandb.ai/silennai-endflow/autoresearch-baseline">W&amp;B (Baseline)</a>
       <a href="https://github.com/karpathy/autoresearch">Autoresearch</a>
-      <a href="https://github.com/lasgroup/SDPO">SDPO</a>
+      <a href="https://self-distillation.github.io/SDPO.html">SDPO</a>
     </div>
   </header>
 
@@ -228,7 +228,7 @@
     <div class="abstract">
       <p>
         We train <strong>Qwen3-14B</strong> to propose modifications to a GPT pretraining script to reduce
-        validation loss using <a href="https://github.com/lasgroup/SDPO">Self-Distillation Policy Optimization (SDPO)</a>.
+        validation loss using <a href="https://self-distillation.github.io/SDPO.html">Self-Distillation Policy Optimization (SDPO)</a>.
         Modified training scripts are run on H100 GPUs and natural language describing experimental outcomes 
         is used as hindsight context for a teacher model which provides a reward signal to a student model. On <a href="https://github.com/karpathy/autoresearch">Karpathy's autoresearch</a>
         benchmark, SDPO achieves <strong>val_bpb&nbsp;=&nbsp;1.025</strong> &mdash; a 2.9% improvement over
@@ -700,7 +700,7 @@
       5-minute training budget on a single H100.
     </p>
     <p>
-      <strong><a href="https://github.com/lasgroup/SDPO">SDPO</a></strong> (Qu et al., 2025) &mdash;
+      <strong><a href="https://self-distillation.github.io/SDPO.html">SDPO</a></strong> (Qu et al., 2025) &mdash;
       Self-Distillation Policy Optimization. Uses the model&rsquo;s own successful rollouts as teacher
       hindsight context, avoiding the need for a separate reward model. We extend it with agentic tool use and
       live environment rewards from real GPU experiments.
