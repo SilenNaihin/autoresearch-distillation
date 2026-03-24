@@ -1,12 +1,12 @@
-# Self-Distillation for Automated ML Research
+# autoresearch-distillation
 
-We train **Qwen3-14B** to propose modifications to a GPT pretraining script to reduce validation loss using [Self-Distillation Policy Optimization (SDPO)](https://self-distillation.github.io/SDPO.html). Modified training scripts are run on H100 GPUs and natural language describing experimental outcomes is used as hindsight context for a teacher model which provides a reward signal to a student model.
+An open-source repo for applying continual learning to [Karpathy's autoresearch](https://github.com/karpathy/autoresearch) benchmark. Built on a [fork of VERL](https://github.com/SilenNaihin/SDPO) that supports [Self-Distillation Policy Optimization (SDPO)](https://self-distillation.github.io/SDPO.html), GRPO, and other RL algorithms for training LLM agents on live experiment outcomes.
 
-On [Karpathy's autoresearch](https://github.com/karpathy/autoresearch) benchmark, SDPO achieves **val_bpb = 1.028** during training — and **1.023** when the trained checkpoint is evaluated with ICL, a 3.1% improvement that surpasses the original 2.8% improvement from the Karpathy agent.
+The agent proposes modifications to a GPT pretraining script, runs real experiments on H100 GPUs, and learns from the results — updating its weights to become a better ML researcher over time.
 
 **[Project Page](https://silennaihin.github.io/autoresearch-distillation/)** | **[W&B (SDPO)](https://wandb.ai/silennai-endflow/autoresearch-sdpo)** | **[W&B (Baselines)](https://wandb.ai/silennai-endflow/autoresearch-baseline)**
 
-## Results
+## Current Results (Qwen3-14B + SDPO)
 
 | Method | Model | Experiments | Best | Avg |
 |--------|-------|-------------|------|-----|
@@ -23,7 +23,7 @@ Absolute baselines differ (Karpathy: 0.998, ours: 1.056) due to platform/setup d
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
-│                     SDPO TRAINING LOOP                           │
+│                     TRAINING LOOP                                │
 │                                                                  │
 │   1. Model receives prompt (train.py + system prompt)            │
 │   2. Model thinks step-by-step, then edits train.py via bash     │
@@ -31,7 +31,7 @@ Absolute baselines differ (Karpathy: 0.998, ours: 1.056) due to platform/setup d
 │   4. Modified train.py dispatched to a remote H100 via SSH       │
 │   5. uv run train.py executes (5 min fixed budget)               │
 │   6. val_bpb parsed → reward signal computed                     │
-│   7. SDPO updates model weights from the rollout                 │
+│   7. RL algorithm updates model weights from the rollout         │
 │   8. GOTO 1 — model improves at proposing experiments            │
 │                                                                  │
 │   No separate reward model. No offline data collection.          │
@@ -39,26 +39,20 @@ Absolute baselines differ (Karpathy: 0.998, ours: 1.056) due to platform/setup d
 └──────────────────────────────────────────────────────────────────┘
 ```
 
-SDPO does not need a successful demonstration for an advantage signal — it only needs the correct solution to be more likely under the teacher model compared to the student model, providing dense supervision even when all rollouts fail. Weight updates encode exploration patterns that compound across training — increasing effective memory and feedback adherence compared to context-bounded approaches.
-
-## Three Approaches
-
-**SDPO** — The model generates rollouts editing `train.py` via bash tool calls. Experiments execute on remote H100s. A reward signal is provided via hindsight context from a teacher model, flowing to the model's weights via policy gradient updates.
-
-**ICL Baseline** — Same model, same tools, no weight updates. The model accumulates experiment feedback in its context window across 50 sequential turns. All learning happens through context conditioning. Best: **val_bpb = 1.038**.
-
-**Single-turn Baseline** — N independent single-shot calls with no history and no feedback. Measures the entropy of the sampling distribution. At 50 turns: **val_bpb = 1.032** — actually beating ICL, suggesting the feedback loop adds consistency but not fundamentally better outcomes.
+The VERL fork supports multiple RL algorithms. SDPO provides dense supervision by using the model conditioned on experiment feedback as a self-teacher — it doesn't need a successful demonstration, only that the correct solution is more likely under the teacher than the student. GRPO and other algorithms supported by VERL work out of the box.
 
 ## Architecture
 
+The repo is designed around a GPU pool pattern: one machine runs inference + training, while a fleet of remote GPUs execute experiments in parallel.
+
 ```
-box3 (2x H100 NVL)    — vLLM inference + FSDP2 training
-box2, box4, box5       — experiment execution (5 H100 slots)
+Training node (2x H100)   — vLLM inference + FSDP2 training (VERL)
+Experiment fleet (N GPUs)  — experiment execution via SSH
 ```
 
-[VERL](https://github.com/volcengine/verl) (via SDPO fork) handles the RL training loop. Our custom `AutoresearchAgentLoop` extends VERL's `ToolAgentLoop` — the model uses a bash tool to edit `train.py` across multiple turns, then the modified script is dispatched to a GPU and the experiment reward flows back into training.
+`AutoresearchAgentLoop` extends VERL's `ToolAgentLoop` — the model uses a bash tool to edit `train.py` across multiple turns, then the modified script is dispatched to a GPU and the experiment reward flows back into training.
 
-`GPUPoolRunner` manages 5 remote H100s via SSH with thread-safe file-based locking.
+`GPUPoolRunner` manages remote GPUs via SSH with thread-safe file-based locking for concurrent dispatch.
 
 ## Project Structure
 
@@ -70,29 +64,29 @@ autoresearch-distillation/
 ├── runners.py                 # GPUPoolRunner — SSH dispatch to remote H100s
 ├── prompts.py                 # System prompt + instance prompt builder
 ├── reward.py                  # Passthrough reward function for VERL
-├── run_sdpo.py                # Entry point — patches SDPO trainer for env metrics logging
+├── run_sdpo.py                # Entry point — patches trainer for env metrics logging
 ├── loop_baseline.py           # ICL + single-turn baseline loop
 │
 ├── configs/
-│   ├── autoresearch_sdpo.yaml # Hydra config for SDPO training (Qwen3-14B)
+│   ├── autoresearch_sdpo.yaml # SDPO config (Qwen3-14B)
 │   ├── bash_tool_config.yaml  # VERL tool config for bash tool
 │   └── agent_loops.yaml       # Agent loop registry
 ├── docs/
 │   └── index.html             # Project page (GitHub Pages)
 │
 ├── autoresearch/              # Upstream submodule (train.py, prepare.py) — read-only
-└── SDPO/                      # SDPO/VERL fork — submodule
+└── SDPO/                      # VERL fork with SDPO — submodule
 ```
 
 ## Usage
 
-### 1. Run SDPO training
+### Training
 
 ```bash
 bash scripts/run_training.sh [experiment_name]
 ```
 
-### 2. Run baselines
+### Baselines
 
 ```bash
 # ICL (multi-turn with feedback)
@@ -114,6 +108,7 @@ python loop_baseline.py --max-turns 50 --mode agent --single-turn --run-name qwe
 
 - **[Autoresearch](https://github.com/karpathy/autoresearch)** (Karpathy) — Single-file GPT pretraining script. The benchmark: modify `train.py` to minimize `val_bpb` within a 5-minute budget on a single H100.
 - **[SDPO](https://self-distillation.github.io/SDPO.html)** (Hubotter et al., 2026) — Self-Distillation Policy Optimization. Converts tokenized environment feedback into a dense learning signal via self-teacher distillation.
+- **[VERL](https://github.com/volcengine/verl)** — RL training framework for LLMs. Our fork adds SDPO, agentic tool use, and multi-turn rollouts.
 
 ## Citation
 
