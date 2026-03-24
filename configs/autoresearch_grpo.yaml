@@ -40,7 +40,7 @@ actor_rollout_ref:
     use_kl_loss: true
     kl_loss_coef: 0.001
     optim:
-      lr: 5e-6
+      lr: 1e-6
       lr_warmup_steps: 5
   rollout:
     name: vllm
