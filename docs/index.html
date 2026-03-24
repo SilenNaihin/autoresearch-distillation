@@ -491,7 +491,6 @@
       recollections in chain-of-thought used to guide reasoning:
     </p>
 
-    <h3>1. Multi-experiment memory synthesis</h3>
     <div class="think-block">
       <div class="think-tag">&lt;think&gt;</div>
       <p>
@@ -503,12 +502,7 @@
         without causing out-of-memory errors.
       </p>
     </div>
-    <p style="font-size: 0.88em; color: var(--text-secondary);">
-      The model synthesizes outcomes from multiple &ldquo;past&rdquo; experiments (80&rarr;worse,
-      60&rarr;crash) into a coherent strategy &mdash; all from weights, not context.
-    </p>
 
-    <h3>2. Self-correction with specific val_bpb recall</h3>
     <div class="think-block">
       <div class="think-tag">&lt;think&gt;</div>
       <p>
@@ -521,12 +515,7 @@
         beyond a certain point might not be helpful.
       </p>
     </div>
-    <p style="font-size: 0.88em; color: var(--text-secondary);">
-      The model catches its own mistake (&ldquo;Wait, no&hellip;&rdquo;), recalls specific val_bpb
-      values (1.024676, 1.033), and draws a generalized conclusion.
-    </p>
 
-    <h3>3. Proactive OOM avoidance</h3>
     <div class="think-block">
       <div class="think-tag">&lt;think&gt;</div>
       <p>
@@ -536,12 +525,7 @@
         to stay within 85GB VRAM.
       </p>
     </div>
-    <p style="font-size: 0.88em; color: var(--text-secondary);">
-      The model proactively plans to reduce batch size <em>before</em> hitting OOM &mdash;
-      a learned strategy, not a reaction to a crash in context.
-    </p>
 
-    <h3>4. Architecture tradeoff reasoning</h3>
     <div class="think-block">
       <div class="think-tag">&lt;think&gt;</div>
       <p>
@@ -552,12 +536,7 @@
         n_kv_head = num_heads. If n_kv_head is reduced, that might allow saving VRAM.
       </p>
     </div>
-    <p style="font-size: 0.88em; color: var(--text-secondary);">
-      The model reasons about <em>why</em> a past change failed (&ldquo;too narrow&rdquo;), then
-      pivots to a different architectural lever (KV heads) &mdash; learned intuition about model capacity.
-    </p>
 
-    <h3>5. Structural exploration after elimination</h3>
     <div class="think-block">
       <div class="think-tag">&lt;think&gt;</div>
       <p>
@@ -568,10 +547,6 @@
         the VRAM is acceptable, it might be worth trying.
       </p>
     </div>
-    <p style="font-size: 0.88em; color: var(--text-secondary);">
-      After learning that simple scaling doesn&rsquo;t work, the model explores structural changes
-      like attention patterns &mdash; moving beyond hyperparameter tuning.
-    </p>
 
     <p style="font-size: 0.88em; color: var(--text-secondary); margin-top: 24px;">
       The model has never seen experiment feedback in its prompt. There is no &ldquo;user&rdquo; and
