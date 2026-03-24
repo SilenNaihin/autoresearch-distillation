@@ -72,7 +72,7 @@ echo "  Config: $CONFIG_NAME"
 echo "  Data: $DATA_DIR"
 echo "============================================"
 
-$PYTHON "$PROJECT_ROOT/run_sdpo.py" \
+$PYTHON "$PROJECT_ROOT/training/run_sdpo.py" \
     --config-name "$CONFIG_NAME" \
     vars.dir="$PROJECT_ROOT" \
     vars.ckpt_dir="/data/checkpoints" \

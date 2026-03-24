@@ -81,7 +81,7 @@ algorithm:
     rollout_is_threshold: 2.0
 
 custom_reward_function:
-  path: ${vars.dir}/reward.py
+  path: ${vars.dir}/training/reward.py
 
 reward_model:
   use_reward_loop: False

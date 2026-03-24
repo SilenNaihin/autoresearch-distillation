@@ -1,5 +1,5 @@
 tools:
-  - class_name: "bash_tool.BashTool"
+  - class_name: "lib.bash_tool.BashTool"
     config:
       type: native
       command_timeout: 30

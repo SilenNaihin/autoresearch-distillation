@@ -78,8 +78,8 @@ for base in [os.path.expanduser('~/.cache'), os.environ.get('XDG_CACHE_HOME', ''
 
 # Seed /data/cache with repo-committed cache (merged from all prior runs)
 mkdir -p /data/cache
-if [ -f "$PROJECT_ROOT/cache/all.json" ]; then
-    cp -n "$PROJECT_ROOT/cache/all.json" /data/cache/all.json 2>/dev/null || true
+if [ -f "$PROJECT_ROOT/data/cache/all.json" ]; then
+    cp -n "$PROJECT_ROOT/data/cache/all.json" /data/cache/all.json 2>/dev/null || true
     echo "Seeded experiment cache from repo ($(python3 -c "import json; d=json.load(open('/data/cache/all.json')); print(len(d.get('diffs',d)))" 2>/dev/null || echo '?') entries)"
 fi
 
@@ -109,7 +109,7 @@ echo "============================================"
 # Shift past the experiment name if provided
 shift 2>/dev/null || true
 
-$PYTHON "$PROJECT_ROOT/run_grpo.py" \
+$PYTHON "$PROJECT_ROOT/training/run_grpo.py" \
     --config-name "$CONFIG_NAME" \
     vars.dir="$PROJECT_ROOT" \
     vars.ckpt_dir="/data/checkpoints" \
