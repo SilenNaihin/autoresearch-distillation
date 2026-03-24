@@ -231,8 +231,9 @@
         validation loss using <a href="https://self-distillation.github.io/SDPO.html">Self-Distillation Policy Optimization (SDPO)</a>.
         Modified training scripts are run on H100 GPUs and natural language describing experimental outcomes 
         is used as hindsight context for a teacher model which provides a reward signal to a student model. On <a href="https://github.com/karpathy/autoresearch">Karpathy's autoresearch</a>
-        benchmark, SDPO achieves <strong>val_bpb&nbsp;=&nbsp;1.025</strong> &mdash; a 2.9% improvement over
-        the unmodified baseline, surpassing the original 2.8% improvement from the Karpathy agent. We compare against
+        benchmark, SDPO achieves <strong>val_bpb&nbsp;=&nbsp;1.028</strong> during training &mdash; and
+        <strong>1.023</strong> when the trained checkpoint is evaluated with ICL, a 3.1% improvement
+        that surpasses the original 2.8% improvement from the Karpathy agent. We compare against
         two baselines &mdash; multi-turn in-context learning and single-turn random exploration &mdash;
         finding that context conditioning adds consistency without improving outcomes, while
         weight updates improve the model's capabilities, leading to improvements not produced by the base model.
@@ -251,17 +252,19 @@
     </p>
 
     <!--
-      Scale: baseline=1.056, best=1.014 → max delta=0.042
-      Bar widths as % of max improvement (0.042):
-      Opus ICL:      0.0418/0.042 = 100%
-      Opus Single:   0.0406/0.042 = 97%
-      SDPO ckpt+ICL: 0.0328/0.042 = 78%
-      Karpathy:      0.028/0.042  = 67%
-      SDPO train:    0.031/0.042  = 74%
-      SDPO ckpt+ST:  0.0278/0.042 = 66%
-      Single-turn:   0.024/0.042  = 57%
-      ICL:           0.018/0.042  = 43%
-      GRPO:          0.011/0.042  = 26%
+      Scale: baseline=1.056, visible best=1.023 → max delta=0.033
+      Bar widths as % of max visible improvement (0.033):
+      SDPO ckpt+ICL: 0.033/0.033 = 100%
+      Karpathy:      0.028/0.033 = 85%
+      SDPO train:    0.028/0.033 = 85%
+      SDPO ckpt+ST:  0.028/0.033 = 85%
+      Single-turn:   0.024/0.033 = 73%
+      ICL:           0.018/0.033 = 55%
+
+      (Commented out entries for future reference:)
+      Opus ICL:      0.042/0.042 = 100%
+      Opus Single:   0.041/0.042 = 97%
+      GRPO:          0.011/0.042 = 26%
     -->
     <div class="chart-container">
       <!--
@@ -294,20 +297,9 @@
           <small>Qwen3-14B, best of 50</small>
         </div>
         <div class="bar-track">
-          <div class="bar-fill sdpo-ckpt" style="width: 78%;"></div>
+          <div class="bar-fill sdpo-ckpt" style="width: 100%;"></div>
         </div>
         <div class="bar-value">&minus;3.1%</div>
-      </div>
-
-      <div class="bar-row">
-        <div class="bar-label">
-          SDPO (training)
-          <small>Qwen3-14B, best of 960</small>
-        </div>
-        <div class="bar-track">
-          <div class="bar-fill sdpo" style="width: 74%;"></div>
-        </div>
-        <div class="bar-value">&minus;2.9%</div>
       </div>
 
       <div class="bar-row">
@@ -316,9 +308,20 @@
           <small>Claude, 126 experiments</small>
         </div>
         <div class="bar-track">
-          <div class="bar-fill claude" style="width: 67%;"></div>
+          <div class="bar-fill claude" style="width: 85%;"></div>
         </div>
         <div class="bar-value">&minus;2.8%</div>
+      </div>
+
+      <div class="bar-row">
+        <div class="bar-label">
+          SDPO (training)
+          <small>Qwen3-14B, best of 960</small>
+        </div>
+        <div class="bar-track">
+          <div class="bar-fill sdpo" style="width: 85%;"></div>
+        </div>
+        <div class="bar-value">&minus;2.6%</div>
       </div>
 
       <div class="bar-row">
@@ -327,7 +330,7 @@
           <small>Qwen3-14B, best of 50</small>
         </div>
         <div class="bar-track">
-          <div class="bar-fill sdpo-ckpt" style="width: 66%;"></div>
+          <div class="bar-fill sdpo-ckpt" style="width: 85%;"></div>
         </div>
         <div class="bar-value">&minus;2.6%</div>
       </div>
@@ -338,7 +341,7 @@
           <small>Qwen3-14B, best of 50</small>
         </div>
         <div class="bar-track">
-          <div class="bar-fill single" style="width: 57%;"></div>
+          <div class="bar-fill single" style="width: 73%;"></div>
         </div>
         <div class="bar-value">&minus;2.3%</div>
       </div>
@@ -349,7 +352,7 @@
           <small>Qwen3-14B, best of 50</small>
         </div>
         <div class="bar-track">
-          <div class="bar-fill icl" style="width: 43%;"></div>
+          <div class="bar-fill icl" style="width: 55%;"></div>
         </div>
         <div class="bar-value">&minus;1.7%</div>
       </div>
@@ -551,7 +554,7 @@
       work. For example, early in training the model attempts to increase the model size before
       finding that this leads to out-of-memory errors. After ~10 steps the model learns to avoid these
       modifications and explores other ways of improving validation loss (e.g., reducing aspect ratio and batch
-      size). SDPO achieves 1.025, a clear separation from both baselines.
+      size). SDPO achieves 1.028, a clear separation from both baselines.
     </p>
     <p>
       The gap between single-turn and ICL measures what context contributes (nothing &mdash; single-turn
@@ -581,8 +584,9 @@
       harder to achieve but cleaner to interpret.
     </p>
     <p>
-      Despite this handicap, our SDPO result (&minus;2.9%) surpasses the original Karpathy agent (&minus;2.8%)
-      using a 14B open-source model trained with RL. The dominant insight is the same across both:
+      Despite this handicap, our SDPO-trained checkpoint evaluated with ICL (&minus;3.1%) surpasses the
+      original Karpathy agent (&minus;2.8%) using a 14B open-source model trained with RL. The dominant
+      insight is the same across both:
       <strong>throughput over parameters</strong> &mdash; trade model size for more training steps within
       the fixed budget. Both agents independently converge on this strategy.
     </p>
@@ -620,8 +624,8 @@
             <td>SDPO (training)</td>
             <td>Qwen3-14B</td>
             <td>960 rollouts (60 steps &times; 16)</td>
-            <td>&minus;2.9%</td>
-            <td>1.071</td>
+            <td>&minus;2.6%</td>
+            <td>1.073</td>
           </tr>
           <tr>
             <td>Karpathy Agent</td>
