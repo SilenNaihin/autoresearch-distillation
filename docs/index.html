@@ -700,10 +700,12 @@
       5-minute training budget on a single H100.
     </p>
     <p>
-      <strong><a href="https://self-distillation.github.io/SDPO.html">SDPO</a></strong> (Qu et al., 2025) &mdash;
-      Self-Distillation Policy Optimization. Uses the model&rsquo;s own successful rollouts as teacher
-      hindsight context, avoiding the need for a separate reward model. We extend it with agentic tool use and
-      live environment rewards from real GPU experiments.
+      <strong><a href="https://self-distillation.github.io/SDPO.html">SDPO</a></strong>
+      (H&uuml;botter et al., 2026) &mdash;
+      Self-Distillation Policy Optimization. Converts tokenized environment feedback into a dense
+      learning signal by treating the current model conditioned on feedback as a self-teacher, then
+      distilling its corrected next-token predictions back into the policy. We extend it with agentic
+      tool use and live environment rewards from real GPU experiments.
     </p>
   </section>
 
