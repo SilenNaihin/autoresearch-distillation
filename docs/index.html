@@ -491,38 +491,92 @@
       recollections in chain-of-thought used to guide reasoning:
     </p>
 
+    <h3>1. Multi-experiment memory synthesis</h3>
     <div class="think-block">
       <div class="think-tag">&lt;think&gt;</div>
       <p>
-        I need to modify the train.py script to lower the val_bpb. <em>The user tried increasing
-        the DEPTH from 8 to 12 before, but that caused an increase in val_bpb.</em> The feedback
-        from the previous attempt shows that when DEPTH was increased to 12, the val_bpb went up to
-        1.06 &mdash; so that was a bad idea.
-      </p>
-      <p>
-        <em>The user&rsquo;s previous attempt was to change DEPTH from 8 to 12, but that didn&rsquo;t
-        help.</em> The previous attempt&rsquo;s feedback shows that increasing depth caused a higher
-        val_bpb. So that&rsquo;s not the way.
-      </p>
-      <p>
-        Alternatively, maybe I should look at modifying other parameters. <em>The user&rsquo;s feedback
-        from an earlier attempt shows that changing ASPECT_RATIO</em> &mdash; the model&rsquo;s
-        dimensions are computed based on ASPECT_RATIO and DEPTH. The head dimension must be a power of
-        two for FlashAttention 3&hellip;
-      </p>
-      <p>
-        &hellip;looking at the activation function: in the MLP, the current code uses
-        <code>F.relu(x).square()</code>. Maybe using a different activation function, like GELU,
-        could help. But <em>in the previous attempt, changing the model architecture didn&rsquo;t
-        help</em>. So perhaps a different approach is needed.
+        <em>The previous attempt tried changing the ASPECT_RATIO from 40 to 80, which increased the
+        model size, but that resulted in a higher val_bpb.</em> So, that approach didn&rsquo;t work.
+        <em>Then someone else tried changing the ASPECT_RATIO to 60, but that led to an increase in
+        parameters and a crash due to VRAM issues.</em> The latest attempt had a change that increased
+        val_bpb, so that wasn&rsquo;t helpful. The goal is to find changes that can lower val_bpb
+        without causing out-of-memory errors.
       </p>
     </div>
-
     <p style="font-size: 0.88em; color: var(--text-secondary);">
+      The model synthesizes outcomes from multiple &ldquo;past&rdquo; experiments (80&rarr;worse,
+      60&rarr;crash) into a coherent strategy &mdash; all from weights, not context.
+    </p>
+
+    <h3>2. Self-correction with specific val_bpb recall</h3>
+    <div class="think-block">
+      <div class="think-tag">&lt;think&gt;</div>
+      <p>
+        The previous attempt increased the ASPECT_RATIO from 40 to 60, which made the model bigger,
+        but it led to a higher val_bpb. Maybe increasing the model size isn&rsquo;t the best approach
+        if it causes the val_bpb to go up. <em>Wait, the previous suggestion actually had a lower
+        val_bpb than the baseline. Wait, no, the previous attempt had a val_bpb of 1.024676, which was
+        lower than the baseline of 1.056, but then the user tried changing ASPECT_RATIO to 60 and the
+        val_bpb went up to 1.033, which was worse.</em> So that indicates that increasing the model size
+        beyond a certain point might not be helpful.
+      </p>
+    </div>
+    <p style="font-size: 0.88em; color: var(--text-secondary);">
+      The model catches its own mistake (&ldquo;Wait, no&hellip;&rdquo;), recalls specific val_bpb
+      values (1.024676, 1.033), and draws a generalized conclusion.
+    </p>
+
+    <h3>3. Proactive OOM avoidance</h3>
+    <div class="think-block">
+      <div class="think-tag">&lt;think&gt;</div>
+      <p>
+        <em>But perhaps increasing ASPECT_RATIO (and thus model_dim) requires decreasing
+        DEVICE_BATCH_SIZE to prevent OOM.</em> For example, if increasing ASPECT_RATIO to 40,
+        which increases model parameters, we might need to lower DEVICE_BATCH_SIZE to, say, 32
+        to stay within 85GB VRAM.
+      </p>
+    </div>
+    <p style="font-size: 0.88em; color: var(--text-secondary);">
+      The model proactively plans to reduce batch size <em>before</em> hitting OOM &mdash;
+      a learned strategy, not a reaction to a crash in context.
+    </p>
+
+    <h3>4. Architecture tradeoff reasoning</h3>
+    <div class="think-block">
+      <div class="think-tag">&lt;think&gt;</div>
+      <p>
+        The original code had HEAD_DIM = 128 (a power of 2), and <em>the previous attempt tried
+        changing it to 64, which is also a power of 2. So that&rsquo;s allowed. But that led to a
+        higher val_bpb. Maybe that&rsquo;s because the model became too narrow.</em> Another angle:
+        the number of heads and key-value heads. The current setup uses n_head = num_heads and
+        n_kv_head = num_heads. If n_kv_head is reduced, that might allow saving VRAM.
+      </p>
+    </div>
+    <p style="font-size: 0.88em; color: var(--text-secondary);">
+      The model reasons about <em>why</em> a past change failed (&ldquo;too narrow&rdquo;), then
+      pivots to a different architectural lever (KV heads) &mdash; learned intuition about model capacity.
+    </p>
+
+    <h3>5. Structural exploration after elimination</h3>
+    <div class="think-block">
+      <div class="think-tag">&lt;think&gt;</div>
+      <p>
+        <em>But maybe changing the window pattern to &ldquo;SLL&rdquo; or &ldquo;LLL&rdquo; could
+        allow the model to have longer contexts in more layers, which might help with validation
+        performance.</em> But how does that relate to the training time and VRAM? If changing the
+        window pattern to &ldquo;LLL&rdquo; (all long windows) would require more memory, but if
+        the VRAM is acceptable, it might be worth trying.
+      </p>
+    </div>
+    <p style="font-size: 0.88em; color: var(--text-secondary);">
+      After learning that simple scaling doesn&rsquo;t work, the model explores structural changes
+      like attention patterns &mdash; moving beyond hyperparameter tuning.
+    </p>
+
+    <p style="font-size: 0.88em; color: var(--text-secondary); margin-top: 24px;">
       The model has never seen experiment feedback in its prompt. There is no &ldquo;user&rdquo; and
-      no &ldquo;previous attempt.&rdquo; But through SDPO training on hundreds of rollouts, the
-      model&rsquo;s weights have internalized that increasing depth alone hurts val_bpb, that
-      ASPECT_RATIO matters, and that architectural changes need careful consideration &mdash;
+      no &ldquo;previous attempt.&rdquo; But through SDPO training on thousands of rollouts, the
+      model&rsquo;s weights have internalized which changes help, which crash, and why &mdash;
       all encoded as intuition, not context.
     </p>
   </section>
