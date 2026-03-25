@@ -165,20 +165,14 @@ class Tracking:
                 logger_instance.log(data=data, step=step)
 
     def __del__(self):
-        if "wandb" in self.logger:
-            self.logger["wandb"].finish(exit_code=0)
-        if "swanlab" in self.logger:
-            self.logger["swanlab"].finish()
-        if "vemlp_wandb" in self.logger:
-            self.logger["vemlp_wandb"].finish(exit_code=0)
-        if "tensorboard" in self.logger:
-            self.logger["tensorboard"].finish()
-        if "clearml" in self.logger:
-            self.logger["clearml"].finish()
-        if "trackio" in self.logger:
-            self.logger["trackio"].finish()
-        if "file" in self.logger:
-            self.logger["file"].finish()
+        for name in list(self.logger):
+            try:
+                if name in ("wandb", "vemlp_wandb"):
+                    self.logger[name].finish(exit_code=0)
+                else:
+                    self.logger[name].finish()
+            except Exception:
+                pass
 
 
 class ClearMLLogger:

@@ -137,6 +137,10 @@ class GPUPoolRunner:
     Dead-box detection: if a slot fails with SSH errors (exit 255),
     it's marked dead for DEAD_COOLDOWN seconds. The next run() call
     skips dead slots and retries on a different one.
+
+    Dynamic fleet: if fleet_file is set, slots are reloaded from that
+    JSON file before each dispatch. Edit the file to add/remove GPUs
+    without restarting the run.
     """
 
     LOCK_DIR = "/data/tmp/gpu_locks"
@@ -146,10 +150,48 @@ class GPUPoolRunner:
     _dead_until: dict[str, float] = {}
     _dead_lock = threading.Lock()
 
-    def __init__(self, slots: list[GPUSlot] | None = None, timeout: int = 600):
-        self.slots = slots or list(FLEET)
+    def __init__(self, slots: list[GPUSlot] | None = None, timeout: int = 600,
+                 fleet_file: str | None = None):
+        self._fleet_file = fleet_file
+        self._initial_slots = slots or list(FLEET)
+        self.slots = list(self._initial_slots)
         self.timeout = timeout
         os.makedirs(self.LOCK_DIR, exist_ok=True)
+        if fleet_file:
+            self._write_fleet_file()
+
+    def _write_fleet_file(self):
+        """Write current slots to fleet file (seed it on first run)."""
+        import json
+        path = self._fleet_file
+        if path and not os.path.exists(path):
+            data = [{"host": s.host, "gpu_id": s.gpu_id, "name": s.name,
+                      "remote_dir": s.remote_dir} for s in self._initial_slots]
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w") as f:
+                json.dump(data, f, indent=2)
+
+    def _reload_fleet(self):
+        """Reload slots from fleet file if it exists and has changed."""
+        import json
+        if not self._fleet_file or not os.path.exists(self._fleet_file):
+            return
+        try:
+            with open(self._fleet_file) as f:
+                data = json.load(f)
+            new_slots = [GPUSlot(host=s["host"], gpu_id=s["gpu_id"], name=s["name"],
+                                  remote_dir=s.get("remote_dir", "~/autoresearch"))
+                         for s in data]
+            if set(s.name for s in new_slots) != set(s.name for s in self.slots):
+                added = set(s.name for s in new_slots) - set(s.name for s in self.slots)
+                removed = set(s.name for s in self.slots) - set(s.name for s in new_slots)
+                if added:
+                    print(f"[pool] Fleet update: added {added}")
+                if removed:
+                    print(f"[pool] Fleet update: removed {removed}")
+                self.slots = new_slots
+        except Exception as e:
+            print(f"[pool] Failed to reload fleet file: {e}")
 
     def _is_dead(self, slot: GPUSlot) -> bool:
         import time
@@ -168,6 +210,7 @@ class GPUPoolRunner:
             print(f"[pool] {slot.name} marked dead for {self.DEAD_COOLDOWN}s")
 
     def run(self, train_py: str) -> RunOutput:
+        self._reload_fleet()
         slot, lock_fd = self._acquire_slot()
         try:
             print(f"[pool] {slot.name} <- dispatching")

@@ -51,6 +51,7 @@ GRPO_FLEET = [
     GPUSlot("h100_azure", "0", "azure-gpu0", "~/autoresearch"),
     GPUSlot("h100-dev-box-2", "0", "box2-gpu0", "~/autoresearch"),
 ]
+GRPO_FLEET_FILE = "/data/grpo_fleet.json"
 
 _pool = None
 _pool_lock = threading.Lock()
@@ -71,7 +72,7 @@ def _get_pool():
     if _pool is None:
         with _pool_lock:
             if _pool is None:
-                _pool = GPUPoolRunner(slots=GRPO_FLEET)
+                _pool = GPUPoolRunner(slots=GRPO_FLEET, fleet_file=GRPO_FLEET_FILE)
                 logger.info(f"GRPO: Initialized GPUPoolRunner with {_pool.total} GPU slots")
     return _pool
 

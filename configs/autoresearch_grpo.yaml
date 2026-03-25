@@ -38,7 +38,7 @@ actor_rollout_ref:
       offload_policy: true
       ulysses_sequence_parallel_size: 2
     use_kl_loss: true
-    kl_loss_coef: 0.001
+    kl_loss_coef: 1e-5
     optim:
       lr: 1e-6
       lr_warmup_steps: 5
