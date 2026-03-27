@@ -3,3 +3,6 @@
   _recursive_: false
   c_puct: 1.0
   max_states: 1000
+  task_config: tasks/autoresearch.yaml
+  fleet_override:
+    - {host: h100-dev-box-2, gpu_id: "0", name: box2-gpu0, remote_dir: ~/autoresearch}

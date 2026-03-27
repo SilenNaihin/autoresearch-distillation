@@ -11,7 +11,7 @@ max_model_len: 65536
 data:
   train_files: ["${vars.dir}/data/autoresearch/train.parquet"]
   val_files: ["${vars.dir}/data/autoresearch/test.parquet"]
-  train_batch_size: 4
+  train_batch_size: 16
   max_prompt_length: 16384
   max_response_length: 49152
   apply_chat_template_kwargs: {"enable_thinking": true}
@@ -28,7 +28,7 @@ actor_rollout_ref:
       attn_implementation: flash_attention_2
   actor:
     ppo_micro_batch_size_per_gpu: 1
-    ppo_mini_batch_size: 4
+    ppo_mini_batch_size: 16
     ppo_max_token_len_per_gpu: ${max_model_len}
     use_dynamic_bsz: False
     ulysses_sequence_parallel_size: 2
@@ -44,10 +44,10 @@ actor_rollout_ref:
       lr_warmup_steps: 5
   rollout:
     name: vllm
-    n: 4
+    n: 8
     temperature: 1.0
     tensor_model_parallel_size: 2
-    gpu_memory_utilization: 0.65
+    gpu_memory_utilization: 0.85
     max_model_len: ${max_model_len}
     max_num_batched_tokens: ${max_model_len}
     calculate_log_probs: True
@@ -74,7 +74,7 @@ actor_rollout_ref:
 
 algorithm:
   adv_estimator: grpo
-  norm_adv_by_std_in_grpo: False
+  norm_adv_by_std_in_grpo: True
   use_kl_in_reward: False
   rollout_correction:
     rollout_is: token
@@ -91,7 +91,7 @@ trainer:
   experiment_name: qwen3-14b-grpo-mcts
   n_gpus_per_node: 2
   nnodes: 1
-  total_epochs: 15
+  total_epochs: 40
   test_freq: -1
   save_freq: 10
   max_actor_ckpt_to_keep: 3

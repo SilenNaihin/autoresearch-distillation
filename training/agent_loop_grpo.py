@@ -48,8 +48,8 @@ logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "WARN"))
 from lib.runners import GPUSlot, GPUPoolRunner
 
 GRPO_FLEET = [
-    GPUSlot("h100_azure", "0", "azure-gpu0", "~/autoresearch"),
-    GPUSlot("h100-dev-box-2", "0", "box2-gpu0", "~/autoresearch"),
+    GPUSlot("h100_azure", "0", "azure-gpu0", "~/autoresearch", max_vram_gb=80),
+    GPUSlot("h100-dev-box-2", "0", "box2-gpu0", "~/autoresearch", max_vram_gb=80),
 ]
 GRPO_FLEET_FILE = "/data/grpo_fleet.json"
 

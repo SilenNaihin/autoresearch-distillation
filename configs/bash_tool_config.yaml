@@ -3,12 +3,12 @@ tools:
     config:
       type: native
       command_timeout: 30
-      autoresearch_dir: /home/azureuser/autoresearch-distillation/autoresearch
+      task_config: tasks/autoresearch.yaml
     tool_schema:
       type: "function"
       function:
         name: "bash"
-        description: "Execute a bash command in the working directory containing train.py"
+        description: "Execute a bash command in the working directory containing the target file"
         parameters:
           type: "object"
           properties:

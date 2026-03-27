@@ -3,3 +3,4 @@
   _recursive_: false
   c_puct: 1.0
   max_states: 1000
+  task_config: tasks/autoresearch.yaml

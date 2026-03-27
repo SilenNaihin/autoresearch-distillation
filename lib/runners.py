@@ -30,6 +30,7 @@ class GPUSlot:
     gpu_id: str      # CUDA device index ("0" or "1")
     name: str        # Human-readable label
     remote_dir: str = "~/autoresearch"
+    max_vram_gb: float | None = None  # Cap VRAM usage (e.g. 80 on a 96GB GPU)
 
 
 # Default fleet — 5 experiment GPUs
@@ -64,6 +65,14 @@ class SSHRunner:
 
     def run(self, train_py: str) -> RunOutput:
         slot = self.slot
+
+        # 0. Cap VRAM if configured
+        if slot.max_vram_gb is not None:
+            gb = slot.max_vram_gb
+            train_py = (
+                f"import torch as _t; _t.cuda.set_per_process_memory_fraction("
+                f"{gb} * 1024**3 / _t.cuda.get_device_properties(0).total_memory)\n"
+            ) + train_py
 
         # 1. Write modified train.py to remote via SSH stdin
         try:
@@ -166,7 +175,8 @@ class GPUPoolRunner:
         path = self._fleet_file
         if path and not os.path.exists(path):
             data = [{"host": s.host, "gpu_id": s.gpu_id, "name": s.name,
-                      "remote_dir": s.remote_dir} for s in self._initial_slots]
+                      "remote_dir": s.remote_dir, "max_vram_gb": s.max_vram_gb}
+                     for s in self._initial_slots]
             os.makedirs(os.path.dirname(path), exist_ok=True)
             with open(path, "w") as f:
                 json.dump(data, f, indent=2)
@@ -180,7 +190,8 @@ class GPUPoolRunner:
             with open(self._fleet_file) as f:
                 data = json.load(f)
             new_slots = [GPUSlot(host=s["host"], gpu_id=s["gpu_id"], name=s["name"],
-                                  remote_dir=s.get("remote_dir", "~/autoresearch"))
+                                  remote_dir=s.get("remote_dir", "~/autoresearch"),
+                                  max_vram_gb=s.get("max_vram_gb"))
                          for s in data]
             if set(s.name for s in new_slots) != set(s.name for s in self.slots):
                 added = set(s.name for s in new_slots) - set(s.name for s in self.slots)
