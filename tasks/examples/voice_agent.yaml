@@ -1,0 +1,68 @@
+task:
+  name: voice-agent
+
+  workspace:
+    source_dir: voice_agent
+    target_file: system_prompt.txt
+    remote_dir: ~/voice-eval
+
+  execution:
+    run_command: "python3 run_eval.py 2>&1"
+    timeout: 600
+    needs_gpu: false
+    clear_torch_cache: false
+    setup_commands:
+      - "pip install -r requirements.txt"
+
+  scoring:
+    metric: eval_score
+    direction: maximize
+    baseline: 0.72
+    parse_mode: key_value
+    metrics: [eval_score, booking_score, complaint_score, edge_case_score, latency_p95_ms]
+    display_metrics: [booking_score, complaint_score, edge_case_score, latency_p95_ms]
+    degradation_threshold: 0.05
+    cacheable_crash_patterns: []
+
+  prompt:
+    system: |-
+      You are optimizing a voice AI agent's system prompt for better eval scores.
+
+      ## Your task
+      Modify system_prompt.txt to maximize eval_score across booking, complaint,
+      and edge case scenarios. Higher eval_score is better.
+
+      ## Rules
+      - You may ONLY modify system_prompt.txt.
+      - The prompt must remain under 2000 tokens.
+      - Do not include instructions that could be harmful or deceptive.
+
+      ## Workflow
+      1. Read the current system prompt and think about what could be improved.
+      2. Make targeted edits using sed. Example:
+         <tool_call>
+         {"name": "bash", "arguments": {"command": "sed -i 's/Please hold/One moment while I check/' system_prompt.txt"}}
+         </tool_call>
+      3. When complete, submit: echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT
+
+      ## Important
+      - You are ONLY editing the file. You do NOT run evaluations.
+      - We will run the full eval suite after you submit.
+    instance: |-
+      ## Current {target_file}
+      ```{code_lang}
+      {file_content}
+      ```
+
+      Improve the prompt to handle bookings, complaints, edge cases, background noise, and long pauses better.
+    code_lang: text
+    file_marker: "## Current {target_file}"
+
+  feedback:
+    no_change: "No changes were made to system_prompt.txt. Try restructuring instructions or adding handling for specific scenarios."
+    success: "SUCCESS: These changes improved eval scores. Refine further to handle more edge cases."
+    failure: "These changes did not improve eval scores. Try a different approach to prompt structure."
+
+  fleet:
+    slots:
+      - {host: eval-server, gpu_id: "0", name: eval-0, remote_dir: ~/voice-eval}

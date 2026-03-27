@@ -1,9 +1,11 @@
 """
-Bash tool for multi-turn agent editing of train.py.
+Bash tool for multi-turn agent editing of target files.
 
 BashTool(BaseTool) is used by VERL's ToolAgentLoop for RL training.
-Creates an isolated copy of autoresearch/, lets the agent edit train.py
+Creates an isolated copy of the workspace, lets the agent edit the target file
 via bash commands, then reads back the result.
+
+Generic — works with any task config (autoresearch, kernel optimization, etc.).
 """
 
 from __future__ import annotations
@@ -27,23 +29,16 @@ SUBMIT_SIGNAL = "COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT"
 # Isolated workdir
 # ---------------------------------------------------------------------------
 
-def create_isolated_workdir(autoresearch_dir: str = "autoresearch") -> str:
-    """Copy autoresearch/ to a temp dir for isolated editing.
-
-    Copies train.py, prepare.py, pyproject.toml, uv.lock, .python-version, etc.
-    Data cache lives in ~/.cache/ so each copy is ~750KB.
+def create_isolated_workdir(source_dir: str) -> str:
+    """Copy source_dir to a temp dir for isolated editing.
 
     Returns the temp dir path.
     """
-    src = os.path.abspath(autoresearch_dir)
+    src = os.path.abspath(source_dir)
     tmp_base = "/data/tmp" if os.path.isdir("/data/tmp") else None
-    tmpdir = tempfile.mkdtemp(prefix="autoresearch_workdir_", dir=tmp_base)
+    tmpdir = tempfile.mkdtemp(prefix="workdir_", dir=tmp_base)
     shutil.copytree(src, tmpdir, dirs_exist_ok=True,
                     ignore=shutil.ignore_patterns("__pycache__", ".git", "*.pyc", ".venv"))
-    # Copy search.py helper if it exists
-    search_py = os.path.join(os.path.dirname(__file__), "search.py")
-    if os.path.exists(search_py):
-        shutil.copy2(search_py, os.path.join(tmpdir, "search.py"))
     return tmpdir
 
 
@@ -71,7 +66,6 @@ def _patch_model_for_verl_compat(model):
         if tool_calls:
             _state["has_called_tool"] = True
             return original_parse(response)
-        # No tool calls: if model already made edits, treat as done
         if _state["has_called_tool"]:
             content = response.choices[0].message.content or ""
             raise Submitted({
@@ -79,8 +73,6 @@ def _patch_model_for_verl_compat(model):
                 "content": content,
                 "extra": {"exit_status": "Submitted", "submission": content},
             })
-        # First response with no tool calls — let mini-swe-agent's
-        # FormatError nudge the model to use the bash tool
         return original_parse(response)
 
     def _reset():
@@ -95,28 +87,28 @@ def run_agent_episode(
     model,
     system_prompt: str,
     instance_prompt: str,
+    target_file: str = "train.py",
     step_limit: int = 20,
     verl_compat: bool = False,
 ) -> tuple[str, list[dict]]:
     """Run a mini-swe-agent editing session in the given workdir.
 
     Args:
-        workdir: Isolated directory containing train.py
+        workdir: Isolated directory containing the target file
         model: A mini-swe-agent Model instance (e.g., LitellmModel)
         system_prompt: System prompt template
-        instance_prompt: Task prompt with train.py content + history
+        instance_prompt: Task prompt with file content + history
+        target_file: The file to read back after editing
         step_limit: Max agent turns before forced termination
         verl_compat: If True, treat no-tool-call responses as submission
-                     (matches VERL ToolAgentLoop termination protocol)
 
     Returns:
-        (modified_train_py, trajectory) where trajectory is agent.messages
+        (modified_file_content, trajectory) where trajectory is agent.messages
     """
     from minisweagent.agents.default import DefaultAgent
     from minisweagent.environments.local import LocalEnvironment
 
     if verl_compat:
-        # Patch once, reset state each episode
         if not hasattr(model, '_verl_compat_reset'):
             _patch_model_for_verl_compat(model)
         model._verl_compat_reset()
@@ -133,14 +125,14 @@ def run_agent_episode(
         system_template=system_prompt,
         instance_template="{{task}}",
         step_limit=step_limit,
-        cost_limit=0.0,  # no cost limit for local vLLM
+        cost_limit=0.0,
     )
 
     agent.run(task=instance_prompt)
 
-    # Read modified train.py
-    train_py_path = os.path.join(workdir, "train.py")
-    modified = Path(train_py_path).read_text()
+    # Read modified target file
+    target_path = os.path.join(workdir, target_file)
+    modified = Path(target_path).read_text()
 
     return modified, list(agent.messages)
 
@@ -149,8 +141,7 @@ def run_agent_episode(
 # VERL BashTool — for RL training via ToolAgentLoop
 # ---------------------------------------------------------------------------
 
-# Add SDPO to path for verl imports (lazy — only needed for BashTool)
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "SDPO"))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "SDPO"))
 
 try:
     from verl.tools.base_tool import BaseTool
@@ -167,26 +158,37 @@ class BashTool(BaseTool):
     """VERL-compatible bash tool that executes commands in an isolated workdir.
 
     Lifecycle per trajectory:
-      1. create() — copies autoresearch/ to a temp dir
+      1. create() — copies source_dir to a temp dir
       2. execute() — runs bash commands in that dir (called multiple times)
       3. release() — cleans up the temp dir
 
     After the model submits (echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT),
-    the agent loop reads modified train.py from the workdir and dispatches
-    it to the GPU fleet for experiment execution.
+    the agent loop reads modified target file from the workdir and dispatches
+    it for experiment execution.
     """
 
     def __init__(self, config: dict, tool_schema: OpenAIFunctionToolSchema):
         super().__init__(config, tool_schema)
-        self._workdirs: dict[str, str] = {}  # instance_id -> workdir path
-        self._submitted: dict[str, bool] = {}  # instance_id -> submitted flag
-        self.autoresearch_dir = config.get("autoresearch_dir", "autoresearch")
+        self._workdirs: dict[str, str] = {}
+        self._submitted: dict[str, bool] = {}
         self.command_timeout = config.get("command_timeout", 30)
+
+        # Load task config for source_dir and target_file
+        task_config_path = config.get("task_config")
+        if task_config_path:
+            from task_config import TaskConfig
+            task = TaskConfig.from_yaml(task_config_path)
+            self.source_dir = task.workspace.source_dir
+            self.target_file = task.workspace.target_file
+        else:
+            # Backward compat fallback
+            self.source_dir = config.get("source_dir", config.get("autoresearch_dir", "autoresearch"))
+            self.target_file = config.get("target_file", "train.py")
 
     async def create(self, instance_id: Optional[str] = None, **kwargs) -> tuple[str, ToolResponse]:
         """Create an isolated workdir for this trajectory."""
         instance_id, _ = await super().create(instance_id, **kwargs)
-        workdir = create_isolated_workdir(self.autoresearch_dir)
+        workdir = create_isolated_workdir(self.source_dir)
         self._workdirs[instance_id] = workdir
         self._submitted[instance_id] = False
         logger.info(f"BashTool.create({instance_id}): workdir={workdir}")
@@ -255,12 +257,12 @@ class BashTool(BaseTool):
         """Check if the agent has submitted for this instance."""
         return self._submitted.get(instance_id, False)
 
-    def read_train_py(self, instance_id: str) -> str | None:
-        """Read the modified train.py from the workdir after submission."""
+    def read_target_file(self, instance_id: str) -> str | None:
+        """Read the modified target file from the workdir after submission."""
         workdir = self._workdirs.get(instance_id)
         if workdir is None:
             return None
-        train_py_path = os.path.join(workdir, "train.py")
-        if os.path.exists(train_py_path):
-            return Path(train_py_path).read_text()
+        target_path = os.path.join(workdir, self.target_file)
+        if os.path.exists(target_path):
+            return Path(target_path).read_text()
         return None

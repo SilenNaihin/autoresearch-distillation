@@ -1,0 +1,98 @@
+task:
+  name: autoresearch
+
+  workspace:
+    source_dir: autoresearch
+    target_file: train.py
+    remote_dir: ~/autoresearch
+
+  execution:
+    run_command: "uv run train.py 2>&1"
+    timeout: 600
+    needs_gpu: true
+    clear_torch_cache: true
+    setup_commands:
+      - "uv sync"
+      - "uv run prepare.py"
+
+  scoring:
+    metric: val_bpb
+    direction: minimize
+    baseline: 1.056
+    parse_mode: key_value
+    metrics:
+      - val_bpb
+      - peak_vram_mb
+      - training_seconds
+      - total_seconds
+      - mfu_percent
+      - total_tokens_M
+      - num_steps
+      - num_params_M
+      - depth
+    display_metrics:
+      - num_steps
+      - num_params_M
+      - peak_vram_mb
+      - mfu_percent
+    degradation_threshold: 0.05
+    cacheable_crash_patterns:
+      - "CUDA out of memory"
+
+  prompt:
+    system: |-
+      You are an autonomous ML researcher optimizing a GPT pretraining script.
+
+      ## Your task
+      Modify train.py to lower val_bpb (bits per byte on validation data).
+      The training budget is fixed at 5 minutes wall-clock. Lower val_bpb is better.
+
+      ## Rules
+      - You may ONLY modify train.py. Do not touch prepare.py or any other file.
+      - You can only use packages already in pyproject.toml: torch, numpy, kernels, matplotlib, pandas, pyarrow, requests, rustbpe, tiktoken.
+      - Do not modify the evaluation harness. The evaluate_bpb function in prepare.py is the ground truth.
+      - VRAM is a soft constraint. Some increase is OK for meaningful val_bpb gains.
+
+      ## Hardware constraints
+      - The experiment GPU has 93 GB VRAM (H100 SXM). The default config uses ~45 GB at depth=8.
+      - VRAM scales with model size. If you increase depth or width, you may need to reduce DEVICE_BATCH_SIZE to compensate. Check that your changes fit in ~85 GB.
+      - FlashAttention 3 (Hopper) requires head_dim to be a power of 2 (64, 128, 256). Other values crash.
+      - TOTAL_BATCH_SIZE must be divisible by (DEVICE_BATCH_SIZE * sequence_length). Violating this triggers an assertion error.
+
+      ## Workflow
+      1. Think step-by-step about what changes could lower val_bpb (architecture, hyperparameters, optimization, etc.)
+      2. Make targeted edits to train.py using sed. Use one tool call per turn. Do not rewrite the entire file. Example:
+         <tool_call>
+         {"name": "bash", "arguments": {"command": "sed -i 's/OLD_VALUE/NEW_VALUE/' train.py"}}
+         </tool_call>
+      3. When complete, submit: echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT
+
+      ## Important
+      - You are ONLY editing the file. You do NOT run experiments.
+      - We will run uv run train.py on a GPU after you submit.
+      - Think carefully about what will improve training, then make correct edits.
+    instance: |-
+      ## Current {target_file}
+      ```{code_lang}
+      {file_content}
+      ```
+
+      You may make a single focused change or combine related changes if they work together. Feel free to try completely new approaches and explore new spaces every once in a while. Be reasonable on effort towards pushing and tweaking a result vs trying something different. You must apply your changes directly using the bash tool — do not just output a diff.
+    code_lang: python
+    file_marker: "## Current {target_file}"
+
+  feedback:
+    no_change: "No changes were made to train.py. You must make new creative edits to reduce validation loss."
+    sed_failed: "FAILURE: your sed command failed: {error}\nYou must specify the target file and ensure the pattern matches exactly."
+    success: "SUCCESS: These changes reduced validation loss. This is a good result. Repeat this approach and combine it with additional modifications to reduce validation loss further."
+    failure: "These changes did not reduce validation loss. Continue exploring new and creative modifications that reduce validation loss."
+    duplicate: "This code has already been evaluated: {metric}={value}.\nDo not re-attempt this change."
+    crash: "Do not re-attempt this change."
+    degradation: "These changes made validation loss significantly worse (degraded by {degradation})."
+
+  fleet:
+    slots:
+      - {host: h100-dev-box-4, gpu_id: "0", name: box4-gpu0, remote_dir: ~/autoresearch-gpu0}
+      - {host: h100-dev-box-4, gpu_id: "1", name: box4-gpu1, remote_dir: ~/autoresearch-gpu1}
+      - {host: h100-dev-box-5, gpu_id: "0", name: box5-gpu0, remote_dir: ~/autoresearch-gpu0}
+      - {host: h100-dev-box-5, gpu_id: "1", name: box5-gpu1, remote_dir: ~/autoresearch-gpu1}

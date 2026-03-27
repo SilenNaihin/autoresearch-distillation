@@ -1,23 +1,10 @@
 # autoresearch-distillation
 
-An open-source repo for applying continual learning to [Karpathy's autoresearch](https://github.com/karpathy/autoresearch) benchmark. Built on a [fork of VERL](https://github.com/SilenNaihin/SDPO) that supports [Self-Distillation Policy Optimization (SDPO)](https://self-distillation.github.io/SDPO.html), GRPO, and other RL algorithms for training LLM agents on live experiment outcomes.
+A framework for training LLM agents via RL (SDPO, GRPO) on **any task improvement loop**. Define a task as a YAML config — what file to edit, how to run experiments, how to score results — and the framework handles rollout generation, experiment dispatch, reward computation, and policy updates.
 
-The agent proposes modifications to a GPT pretraining script, runs real experiments on H100 GPUs, and learns from the results — updating its weights to become a better ML researcher over time.
+Built on a [fork of VERL](https://github.com/SilenNaihin/SDPO) that supports [Self-Distillation Policy Optimization (SDPO)](https://self-distillation.github.io/SDPO.html), GRPO, and other RL algorithms.
 
 **[Project Page](https://silennaihin.github.io/autoresearch-distillation/)** | **[W&B (SDPO)](https://wandb.ai/silennai-endflow/autoresearch-sdpo)** | **[W&B (Baselines)](https://wandb.ai/silennai-endflow/autoresearch-baseline)**
-
-## Current Results (Qwen3-14B + SDPO)
-
-| Method | Model | Experiments | Best | Avg |
-|--------|-------|-------------|------|-----|
-| **SDPO ckpt + ICL** | Qwen3-14B-SDPO | 50 turns (with feedback) | **1.023 (−3.1%)** | 1.071 |
-| Karpathy Agent | Claude? | 126 | 0.970 (−2.8%) | — |
-| SDPO (training) | Qwen3-14B | 960 rollouts (60 steps × 16) | 1.028 (−2.6%) | 1.073 |
-| SDPO ckpt + single | Qwen3-14B-SDPO | 50 turns (no feedback) | 1.028 (−2.6%) | 1.060 |
-| Single-turn | Qwen3-14B | 50 turns (no feedback) | 1.032 (−2.3%) | 1.122 |
-| ICL baseline | Qwen3-14B | 50 turns (with feedback) | 1.038 (−1.7%) | 1.066 |
-
-Absolute baselines differ (Karpathy: 0.998, ours: 1.056) due to platform/setup differences. Relative improvements are compared.
 
 ## How It Works
 
@@ -25,12 +12,12 @@ Absolute baselines differ (Karpathy: 0.998, ours: 1.056) due to platform/setup d
 ┌──────────────────────────────────────────────────────────────────┐
 │                     TRAINING LOOP                                │
 │                                                                  │
-│   1. Model receives prompt (train.py + system prompt)            │
-│   2. Model thinks step-by-step, then edits train.py via bash     │
+│   1. Model receives prompt (target file + system prompt)         │
+│   2. Model thinks step-by-step, then edits file via bash         │
 │   3. Model submits: echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT   │
-│   4. Modified train.py dispatched to a remote H100 via SSH       │
-│   5. uv run train.py executes (5 min fixed budget)               │
-│   6. val_bpb parsed → reward signal computed                     │
+│   4. Modified file dispatched to a remote GPU/CPU via SSH        │
+│   5. Run command executes (configurable timeout)                 │
+│   6. Metrics parsed → reward signal computed                     │
 │   7. RL algorithm updates model weights from the rollout         │
 │   8. GOTO 1 — model improves at proposing experiments            │
 │                                                                  │
@@ -39,51 +26,194 @@ Absolute baselines differ (Karpathy: 0.998, ours: 1.056) due to platform/setup d
 └──────────────────────────────────────────────────────────────────┘
 ```
 
-The VERL fork supports multiple RL algorithms. SDPO provides dense supervision by using the model conditioned on experiment feedback as a self-teacher — it doesn't need a successful demonstration, only that the correct solution is more likely under the teacher than the student. GRPO and other algorithms supported by VERL work out of the box.
+## Add a New Task
+
+Create a YAML config in `tasks/` and a source directory with the target file:
+
+```yaml
+task:
+  name: my-task
+
+  workspace:
+    source_dir: my_source        # local dir with target file
+    target_file: model.py        # file the agent modifies
+    remote_dir: ~/my-task        # where to run on remote machines
+
+  execution:
+    run_command: "python3 train.py 2>&1"
+    timeout: 300
+    needs_gpu: true
+    clear_torch_cache: false
+    setup_commands:
+      - "pip install -r requirements.txt"
+
+  scoring:
+    metric: val_loss             # primary metric to optimize
+    direction: minimize          # or "maximize"
+    baseline: 1.0                # starting value
+    parse_mode: key_value        # parses "metric_name: value" from stdout
+    metrics: [val_loss, train_time_s]
+    display_metrics: [train_time_s]
+    degradation_threshold: 0.05
+
+  prompt:
+    system: |-
+      You are optimizing model.py to minimize val_loss...
+    instance: |-
+      ## Current {target_file}
+      ```{code_lang}
+      {file_content}
+      ```
+    code_lang: python
+    file_marker: "## Current {target_file}"
+
+  fleet:
+    slots:
+      - {host: gpu-box-1, gpu_id: "0", name: gpu1, remote_dir: ~/my-task}
+```
+
+Verify it works:
+
+```bash
+python test_task_config.py tasks/my_task.yaml
+```
+
+Point the training config at it:
+
+```yaml
+# configs/agent_loops.yaml
+- task_config: tasks/my_task.yaml
+```
+
+## Example Tasks
+
+The framework ships with working examples across different domains:
+
+| Task | Metric | Direction | Target File | GPU | Domain |
+|------|--------|-----------|-------------|-----|--------|
+| [autoresearch](tasks/autoresearch.yaml) | val_bpb | minimize | train.py | yes | ML pretraining |
+| [triton-kernel](tasks/examples/triton_kernel.yaml) | kernel_latency_us | minimize | kernel.py | yes | GPU kernel optimization |
+| [baseball-pitch](tasks/examples/baseball_pitch.yaml) | rmse_mph | minimize | model.py | no | Tabular ML |
+| [voice-agent](tasks/examples/voice_agent.yaml) | eval_score | maximize | system_prompt.txt | no | Prompt engineering |
+| [liquid-speedup](tasks/examples/liquid_speedup.yaml) | combined_time_ms | minimize | template.py | no | Code optimization |
+
+All examples have working source directories and have been tested end-to-end on an A100.
+
+```bash
+# Run smoke tests on all task configs
+python test_task_config.py --all
+```
+
+## Flagship: Autoresearch (Qwen3-14B + SDPO)
+
+The framework was developed on [Karpathy's autoresearch](https://github.com/karpathy/autoresearch) benchmark — modifying a GPT pretraining script to minimize `val_bpb` within a 5-minute budget on a single H100.
+
+| Method | Model | Experiments | Best | Avg |
+|--------|-------|-------------|------|-----|
+| **SDPO ckpt + ICL** | Qwen3-14B-SDPO | 50 turns (with feedback) | **1.023 (-3.1%)** | 1.071 |
+| Karpathy Agent | Claude? | 126 | 0.970 (-2.8%) | — |
+| SDPO (training) | Qwen3-14B | 960 rollouts (60 steps x 16) | 1.028 (-2.6%) | 1.073 |
+| SDPO ckpt + single | Qwen3-14B-SDPO | 50 turns (no feedback) | 1.028 (-2.6%) | 1.060 |
+| Single-turn | Qwen3-14B | 50 turns (no feedback) | 1.032 (-2.3%) | 1.122 |
+| ICL baseline | Qwen3-14B | 50 turns (with feedback) | 1.038 (-1.7%) | 1.066 |
+
+Absolute baselines differ (Karpathy: 0.998, ours: 1.056) due to platform/setup differences. Relative improvements are compared.
 
 ## Architecture
 
-The repo is designed around a GPU pool pattern: one machine runs inference + training, while a fleet of remote GPUs execute experiments in parallel.
+All task-specific configuration lives in `TaskConfig`, loaded from YAML. The agent loops, runners, and tools are fully generic.
 
 ```
 Training node (2x H100)   — vLLM inference + FSDP2 training (VERL)
 Experiment fleet (N GPUs)  — experiment execution via SSH
 ```
 
-`AutoresearchAgentLoop` extends VERL's `ToolAgentLoop` — the model uses a bash tool to edit `train.py` across multiple turns, then the modified script is dispatched to a GPU and the experiment reward flows back into training.
+```
+                    ┌──────────────────┐
+                    │   TaskConfig     │
+                    │  (from YAML)     │
+                    └────────┬─────────┘
+                             │
+              ┌──────────────┼──────────────┐
+              │              │              │
+     ┌────────▼───────┐ ┌───▼────┐ ┌───────▼──────┐
+     │  Agent Loop     │ │Runners │ │  BashTool    │
+     │  (SDPO/GRPO)    │ │(SSH)   │ │  (workdir)   │
+     └────────┬────────┘ └───┬────┘ └───────┬──────┘
+              │              │              │
+              └──────────────┼──────────────┘
+                             │
+                    ┌────────▼─────────┐
+                    │  Remote Fleet    │
+                    │  (GPU/CPU boxes) │
+                    └──────────────────┘
+```
 
-`GPUPoolRunner` manages remote GPUs via SSH with thread-safe file-based locking for concurrent dispatch.
+- **TaskConfig** (`task_config.py`) — Central config dataclass. Handles prompt generation, metric parsing, reward computation, diff generation, feedback formatting.
+- **Agent Loops** (`agent_loop.py`, `agent_loop_grpo.py`) — VERL agent loops for SDPO and GRPO. Multi-turn bash editing + experiment dispatch. Fully generic.
+- **Runners** (`runners.py`) — `SSHRunner` dispatches to a single slot. `GPUPoolRunner` manages a fleet with thread-safe locking and dead-box detection.
+- **BashTool** (`bash_tool.py`) — VERL tool. Creates isolated workdirs, executes bash commands, reads target files.
+- **Reuse Buffer** (`reuse_buffer.py`) — PUCT-based exploration tree. Tracks file versions and metric values for GRPO exploration.
+- **Experiment Cache** (`experiment_cache.py`) — Deduplicates experiments by file hash.
 
 ## Project Structure
 
 ```
 autoresearch-distillation/
-├── agent_loop.py              # VERL agent loop — multi-turn bash editing + experiment dispatch
-├── bash_tool.py               # VERL BashTool — isolated workdir + bash execution
-├── environment.py             # RunOutput, parse_metrics(), compute_reward()
-├── runners.py                 # GPUPoolRunner — SSH dispatch to remote H100s
-├── prompts.py                 # System prompt + instance prompt builder
-├── reward.py                  # Passthrough reward function for VERL
-├── run_sdpo.py                # Entry point — patches trainer for env metrics logging
-├── loop_baseline.py           # ICL + single-turn baseline loop
+├── task_config.py              # Central config — loaded from YAML
+├── test_task_config.py         # Smoke tests for any task config
+│
+├── agent_loop.py               # VERL agent loop (SDPO) — multi-turn editing + dispatch
+├── agent_loop_grpo.py          # VERL agent loop (GRPO) — with PUCT reuse buffer
+├── bash_tool.py                # VERL BashTool — isolated workdir + bash execution
+├── runners.py                  # GPUPoolRunner — SSH dispatch to remote fleet
+├── environment.py              # RunOutput dataclass
+├── prompts.py                  # Thin wrapper around TaskConfig prompt methods
+├── reuse_buffer.py             # PUCT exploration tree for GRPO
+├── experiment_cache.py         # File-hash deduplication cache
+├── reward.py                   # Passthrough reward function for VERL
+├── run_sdpo.py                 # Entry point — patches trainer for env metrics logging
+├── loop_baseline.py            # ICL + single-turn baseline loop
+│
+├── tasks/
+│   ├── autoresearch.yaml       # Flagship task — GPT pretraining optimization
+│   └── examples/
+│       ├── baseball_pitch.yaml # Tabular ML — minimize RMSE
+│       ├── liquid_speedup.yaml # Code optimization — minimize runtime
+│       ├── triton_kernel.yaml  # GPU kernel — minimize latency
+│       └── voice_agent.yaml    # Prompt engineering — maximize eval score
+│
+├── autoresearch/               # Source for autoresearch task (train.py, prepare.py)
+├── pitch_model/                # Source for baseball pitch task
+├── voice_agent/                # Source for voice agent task
+├── liquid/                     # Source for liquid speedup task
+├── autokernel/                 # Source for triton kernel task
 │
 ├── configs/
-│   ├── autoresearch_sdpo.yaml # SDPO config (Qwen3-14B)
-│   ├── bash_tool_config.yaml  # VERL tool config for bash tool
-│   └── agent_loops.yaml       # Agent loop registry
-├── docs/
-│   └── index.html             # Project page (GitHub Pages)
+│   ├── autoresearch_sdpo.yaml  # SDPO training config (Qwen3-14B)
+│   ├── autoresearch_grpo.yaml  # GRPO training config
+│   ├── agent_loops.yaml        # SDPO agent loop registry
+│   ├── agent_loops_grpo.yaml   # GRPO agent loop registry
+│   └── bash_tool_config.yaml   # VERL tool config
 │
-├── autoresearch/              # Upstream submodule (train.py, prepare.py) — read-only
-└── SDPO/                      # VERL fork with SDPO — submodule
+├── docs/
+│   └── index.html              # Project page (GitHub Pages)
+│
+└── SDPO/                       # VERL fork with SDPO — submodule
 ```
 
 ## Usage
 
-### Training
+### Training (SDPO)
 
 ```bash
 bash scripts/run_training.sh [experiment_name]
+```
+
+### Training (GRPO)
+
+```bash
+bash scripts/run_grpo.sh [experiment_name]
 ```
 
 ### Baselines
@@ -113,8 +243,8 @@ python loop_baseline.py --max-turns 50 --mode agent --single-turn --run-name qwe
 ## Citation
 
 ```bibtex
-@misc{naihin2026sdpoautoresearch,
-  title   = {Self-Distillation for Automated ML Research},
+@misc{naihin2026distillloop,
+  title   = {RL Training for LLM Agents on Live Task Improvement Loops},
   author  = {Naihin, Silen and Fallah, Kion},
   year    = {2026},
   url     = {https://github.com/SilenNaihin/autoresearch-distillation}

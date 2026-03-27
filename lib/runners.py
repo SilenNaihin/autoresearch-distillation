@@ -1,12 +1,14 @@
 """
-GPU fleet runners for dispatching autoresearch experiments.
+GPU fleet runners for dispatching experiments.
 
-Maps your fleet of H100s into a pool of GPU slots. Each experiment gets
-dispatched to a free slot via SSH, run for ~5 min, and results returned.
+Generic — works with any task config. The run command, GPU flags,
+and target file are all configurable.
 
 Usage:
-    pool = GPUPoolRunner()
-    output = pool.run(modified_train_py)  # blocks until a GPU is free
+    from task_config import TaskConfig
+    task = TaskConfig.from_yaml("tasks/autoresearch.yaml")
+    pool = GPUPoolRunner(task=task)
+    output = pool.run(modified_content)  # blocks until a slot is free
 
 Thread-safe — multiple VERL workers call pool.run() concurrently.
 """
@@ -29,27 +31,7 @@ class GPUSlot:
     host: str        # SSH host alias from ~/.ssh/config
     gpu_id: str      # CUDA device index ("0" or "1")
     name: str        # Human-readable label
-    remote_dir: str = "~/autoresearch"
-    max_vram_gb: float | None = None  # Cap VRAM usage (e.g. 80 on a 96GB GPU)
-
-
-# Default fleet — 5 experiment GPUs
-# box3 reserved for vLLM inference / SDPO training, not available for experiments.
-# Each GPU gets its own remote_dir to avoid file races on 2-GPU boxes.
-FLEET = [
-    # h100-dev-box: 1x H100 NVL — down as of 2026-03-09
-    # GPUSlot("h100_azure",      "0", "box1-gpu0", "~/autoresearch"),
-    # h100-dev-box-2: 1x H100 NVL — removed from fleet 2026-03-13
-    # GPUSlot("h100-dev-box-2",  "0", "box2-gpu0", "~/autoresearch"),
-    # h100-dev-box-4: 2x H100 — separate dirs per GPU
-    GPUSlot("h100-dev-box-4",  "0", "box4-gpu0", "~/autoresearch-gpu0"),
-    GPUSlot("h100-dev-box-4",  "1", "box4-gpu1", "~/autoresearch-gpu1"),
-    # h100-dev-box-5: 2x H100 — separate dirs per GPU
-    GPUSlot("h100-dev-box-5",  "0", "box5-gpu0", "~/autoresearch-gpu0"),
-    GPUSlot("h100-dev-box-5",  "1", "box5-gpu1", "~/autoresearch-gpu1"),
-    # a100-backup-1: 1x A100 80GB PCIe — down as of 2026-03-10 (DNS unreachable)
-    # GPUSlot("a100-backup-1",   "0", "a100-gpu0", "~/autoresearch"),
-]
+    remote_dir: str = "~"
 
 
 # ---------------------------------------------------------------------------
@@ -57,29 +39,29 @@ FLEET = [
 # ---------------------------------------------------------------------------
 
 class SSHRunner:
-    """Runs an experiment on a specific remote GPU via SSH."""
+    """Runs an experiment on a specific remote slot via SSH."""
 
-    def __init__(self, slot: GPUSlot, timeout: int = 600):
+    def __init__(self, slot: GPUSlot, timeout: int = 600,
+                 target_file: str = "train.py",
+                 run_command: str = "uv run train.py 2>&1",
+                 needs_gpu: bool = True,
+                 clear_torch_cache: bool = False):
         self.slot = slot
         self.timeout = timeout
+        self.target_file = target_file
+        self.run_command = run_command
+        self.needs_gpu = needs_gpu
+        self.clear_torch_cache = clear_torch_cache
 
-    def run(self, train_py: str) -> RunOutput:
+    def run(self, content: str) -> RunOutput:
         slot = self.slot
 
-        # 0. Cap VRAM if configured
-        if slot.max_vram_gb is not None:
-            gb = slot.max_vram_gb
-            train_py = (
-                f"import torch as _t; _t.cuda.set_per_process_memory_fraction("
-                f"{gb} * 1024**3 / _t.cuda.get_device_properties(0).total_memory)\n"
-            ) + train_py
-
-        # 1. Write modified train.py to remote via SSH stdin
+        # 1. Write modified target file to remote via SSH stdin
         try:
-            write_cmd = f"cat > {slot.remote_dir}/train.py"
+            write_cmd = f"cat > {slot.remote_dir}/{self.target_file}"
             sync = subprocess.run(
                 ["ssh", "-o", "ConnectTimeout=10", "-o", "BatchMode=yes", slot.host, write_cmd],
-                input=train_py, capture_output=True, text=True, timeout=30,
+                input=content, capture_output=True, text=True, timeout=30,
             )
             if sync.returncode != 0:
                 return RunOutput("", f"[{slot.name}] File sync failed: {sync.stderr.strip()}", sync.returncode)
@@ -88,20 +70,31 @@ class SSHRunner:
         except OSError as e:
             return RunOutput("", f"[{slot.name}] SSH error during file sync: {e}", -1)
 
-        # 2. Run experiment on remote GPU
-        #    - Kill any stale train.py on this GPU first
-        #    - PATH includes ~/.local/bin for uv
-        #    - Redirect stderr to stdout so we capture everything
-        #    - Exit code signals: 137=OOM killed, 139=segfault, -9=SIGKILL
-        cmd = (
-            f"nvidia-smi --query-compute-apps=pid --id={slot.gpu_id} --format=csv,noheader "
-            f"| xargs -r kill -9 2>/dev/null; sleep 2; "
-            f"export TORCHINDUCTOR_DIR=/tmp/torchinductor_${{USER}}_gpu{slot.gpu_id}; "
-            f"rm -rf $TORCHINDUCTOR_DIR 2>/dev/null; "
-            f"export PATH=$HOME/.local/bin:$PATH && "
-            f"cd {slot.remote_dir} && "
-            f"CUDA_VISIBLE_DEVICES={slot.gpu_id} uv run train.py 2>&1"
-        )
+        # 2. Build remote command
+        parts = []
+
+        # GPU cleanup: kill stale processes on this device
+        if self.needs_gpu:
+            parts.append(
+                f"nvidia-smi --query-compute-apps=pid --id={slot.gpu_id} --format=csv,noheader "
+                f"| xargs -r kill -9 2>/dev/null; sleep 2"
+            )
+
+        # Torch inductor cache cleanup
+        if self.clear_torch_cache:
+            parts.append(
+                f"export TORCHINDUCTOR_DIR=/tmp/torchinductor_${{USER}}_gpu{slot.gpu_id}; "
+                f"rm -rf $TORCHINDUCTOR_DIR 2>/dev/null"
+            )
+
+        # PATH + cd + run
+        run_prefix = f"export PATH=$HOME/.local/bin:$PATH && cd {slot.remote_dir}"
+        if self.needs_gpu:
+            run_prefix += f" && export CUDA_VISIBLE_DEVICES={slot.gpu_id}"
+        run_part = f"{run_prefix} && {self.run_command}"
+        parts.append(run_part)
+
+        cmd = "; ".join(parts)
 
         try:
             r = subprocess.run(
@@ -109,7 +102,6 @@ class SSHRunner:
                  "-o", "ServerAliveCountMax=3", "-o", "BatchMode=yes", slot.host, cmd],
                 capture_output=True, text=True, timeout=self.timeout,
             )
-            # Detect OOM / signal kills
             if r.returncode == 137:
                 return RunOutput(r.stdout, f"[{slot.name}] OOM killed (SIGKILL/137)\n{r.stderr}", 137)
             if r.returncode == 139:
@@ -118,15 +110,16 @@ class SSHRunner:
 
         except subprocess.TimeoutExpired:
             # Kill remote process tree
-            try:
-                subprocess.run(
-                    ["ssh", "-o", "ConnectTimeout=5", slot.host,
-                     f"nvidia-smi --query-compute-apps=pid --id={slot.gpu_id} --format=csv,noheader "
-                     f"| xargs -r kill -9 2>/dev/null"],
-                    capture_output=True, timeout=10,
-                )
-            except Exception:
-                pass
+            if self.needs_gpu:
+                try:
+                    subprocess.run(
+                        ["ssh", "-o", "ConnectTimeout=5", slot.host,
+                         f"nvidia-smi --query-compute-apps=pid --id={slot.gpu_id} --format=csv,noheader "
+                         f"| xargs -r kill -9 2>/dev/null"],
+                        capture_output=True, timeout=10,
+                    )
+                except Exception:
+                    pass
             return RunOutput("", f"[{slot.name}] TIMEOUT: exceeded {self.timeout}s", -1)
 
         except OSError as e:
@@ -134,75 +127,57 @@ class SSHRunner:
 
 
 # ---------------------------------------------------------------------------
-# Pool runner — multi-GPU with auto-allocation
+# Pool runner — multi-slot with auto-allocation
 # ---------------------------------------------------------------------------
 
 class GPUPoolRunner:
-    """Pool of GPU slots with automatic allocation.
+    """Pool of slots with automatic allocation.
 
     Uses file-based locking (fcntl.flock) for cross-process safety.
-    Multiple Ray workers can safely share GPU slots without collisions.
+    Multiple Ray workers can safely share slots without collisions.
 
     Dead-box detection: if a slot fails with SSH errors (exit 255),
-    it's marked dead for DEAD_COOLDOWN seconds. The next run() call
-    skips dead slots and retries on a different one.
-
-    Dynamic fleet: if fleet_file is set, slots are reloaded from that
-    JSON file before each dispatch. Edit the file to add/remove GPUs
-    without restarting the run.
+    it's marked dead for DEAD_COOLDOWN seconds.
     """
 
     LOCK_DIR = "/data/tmp/gpu_locks"
     DEAD_COOLDOWN = 300  # 5 minutes before retrying a dead box
 
-    # Shared across all instances in the same process
     _dead_until: dict[str, float] = {}
     _dead_lock = threading.Lock()
 
     def __init__(self, slots: list[GPUSlot] | None = None, timeout: int = 600,
-                 fleet_file: str | None = None):
-        self._fleet_file = fleet_file
-        self._initial_slots = slots or list(FLEET)
-        self.slots = list(self._initial_slots)
+                 task=None):
+        """Initialize pool.
+
+        Args:
+            slots: Explicit list of GPUSlots. If None, loaded from task config.
+            timeout: SSH command timeout.
+            task: TaskConfig instance (used for run_command, target_file, GPU flags).
+        """
+        if slots is not None:
+            self.slots = list(slots)
+        elif task is not None:
+            self.slots = task.get_fleet_slots()
+        else:
+            self.slots = []
+
         self.timeout = timeout
+        self._task = task
+
+        # Extract execution params from task config
+        if task is not None:
+            self._target_file = task.workspace.target_file
+            self._run_command = task.execution.run_command
+            self._needs_gpu = task.execution.needs_gpu
+            self._clear_torch_cache = task.execution.clear_torch_cache
+        else:
+            self._target_file = "train.py"
+            self._run_command = "uv run train.py 2>&1"
+            self._needs_gpu = True
+            self._clear_torch_cache = False
+
         os.makedirs(self.LOCK_DIR, exist_ok=True)
-        if fleet_file:
-            self._write_fleet_file()
-
-    def _write_fleet_file(self):
-        """Write current slots to fleet file (seed it on first run)."""
-        import json
-        path = self._fleet_file
-        if path and not os.path.exists(path):
-            data = [{"host": s.host, "gpu_id": s.gpu_id, "name": s.name,
-                      "remote_dir": s.remote_dir, "max_vram_gb": s.max_vram_gb}
-                     for s in self._initial_slots]
-            os.makedirs(os.path.dirname(path), exist_ok=True)
-            with open(path, "w") as f:
-                json.dump(data, f, indent=2)
-
-    def _reload_fleet(self):
-        """Reload slots from fleet file if it exists and has changed."""
-        import json
-        if not self._fleet_file or not os.path.exists(self._fleet_file):
-            return
-        try:
-            with open(self._fleet_file) as f:
-                data = json.load(f)
-            new_slots = [GPUSlot(host=s["host"], gpu_id=s["gpu_id"], name=s["name"],
-                                  remote_dir=s.get("remote_dir", "~/autoresearch"),
-                                  max_vram_gb=s.get("max_vram_gb"))
-                         for s in data]
-            if set(s.name for s in new_slots) != set(s.name for s in self.slots):
-                added = set(s.name for s in new_slots) - set(s.name for s in self.slots)
-                removed = set(s.name for s in self.slots) - set(s.name for s in new_slots)
-                if added:
-                    print(f"[pool] Fleet update: added {added}")
-                if removed:
-                    print(f"[pool] Fleet update: removed {removed}")
-                self.slots = new_slots
-        except Exception as e:
-            print(f"[pool] Failed to reload fleet file: {e}")
 
     def _is_dead(self, slot: GPUSlot) -> bool:
         import time
@@ -210,7 +185,6 @@ class GPUPoolRunner:
             deadline = self._dead_until.get(slot.name, 0)
             if time.time() < deadline:
                 return True
-            # Expired — remove
             self._dead_until.pop(slot.name, None)
             return False
 
@@ -220,24 +194,31 @@ class GPUPoolRunner:
             self._dead_until[slot.name] = time.time() + self.DEAD_COOLDOWN
             print(f"[pool] {slot.name} marked dead for {self.DEAD_COOLDOWN}s")
 
-    def run(self, train_py: str) -> RunOutput:
-        self._reload_fleet()
+    def _make_runner(self, slot: GPUSlot) -> SSHRunner:
+        return SSHRunner(
+            slot, timeout=self.timeout,
+            target_file=self._target_file,
+            run_command=self._run_command,
+            needs_gpu=self._needs_gpu,
+            clear_torch_cache=self._clear_torch_cache,
+        )
+
+    def run(self, content: str) -> RunOutput:
         slot, lock_fd = self._acquire_slot()
         try:
             print(f"[pool] {slot.name} <- dispatching")
-            runner = SSHRunner(slot, timeout=self.timeout)
-            result = runner.run(train_py)
+            runner = self._make_runner(slot)
+            result = runner.run(content)
 
             # SSH-level failure → mark dead, retry on another slot
             if result.returncode == 255 or "Connection timed out" in result.stderr:
                 self._mark_dead(slot)
                 self._release_slot(lock_fd)
-                # Retry once on a different slot
                 slot2, lock_fd2 = self._acquire_slot()
                 try:
                     print(f"[pool] {slot2.name} <- retrying (after {slot.name} SSH fail)")
-                    runner2 = SSHRunner(slot2, timeout=self.timeout)
-                    result = runner2.run(train_py)
+                    runner2 = self._make_runner(slot2)
+                    result = runner2.run(content)
                     if result.returncode == 255 or "Connection timed out" in result.stderr:
                         self._mark_dead(slot2)
                     status = "ok" if result.returncode == 0 else f"exit {result.returncode}"
@@ -245,7 +226,6 @@ class GPUPoolRunner:
                     return result
                 finally:
                     self._release_slot(lock_fd2)
-                return result
 
             status = "ok" if result.returncode == 0 else f"exit {result.returncode}"
             print(f"[pool] {slot.name} -> done ({status})")
@@ -254,7 +234,7 @@ class GPUPoolRunner:
             self._release_slot(lock_fd)
 
     def _acquire_slot(self) -> tuple[GPUSlot, int]:
-        """Acquire an exclusive lock on an available GPU slot, skipping dead boxes."""
+        """Acquire an exclusive lock on an available slot, skipping dead boxes."""
         import fcntl
         import time
         while True:
@@ -271,7 +251,7 @@ class GPUPoolRunner:
             time.sleep(2)
 
     def _release_slot(self, lock_fd) -> None:
-        """Release the GPU slot lock."""
+        """Release the slot lock."""
         import fcntl
         try:
             fcntl.flock(lock_fd, fcntl.LOCK_UN)
@@ -288,11 +268,9 @@ class GPUPoolRunner:
 # Fleet setup — bootstrap remote machines
 # ---------------------------------------------------------------------------
 
-def setup_slot(slot: GPUSlot, local_repo: str = "autoresearch") -> bool:
-    """Set up a remote machine for running experiments.
-
-    Syncs the autoresearch repo and installs deps at slot.remote_dir.
-    """
+def setup_slot(slot: GPUSlot, source_dir: str = "autoresearch",
+               setup_commands: list[str] | None = None) -> bool:
+    """Set up a remote machine for running experiments."""
     host = slot.host
     remote = slot.remote_dir
     uv = "export PATH=$HOME/.local/bin:$PATH && "
@@ -305,11 +283,13 @@ def setup_slot(slot: GPUSlot, local_repo: str = "autoresearch") -> bool:
         (f"Create {remote}", ["ssh", host, f"mkdir -p {remote}"]),
         ("Sync repo files", [
             "rsync", "-az", "--exclude=.git", "--exclude=__pycache__",
-            f"{local_repo}/", f"{host}:{remote}/",
+            f"{source_dir}/", f"{host}:{remote}/",
         ]),
-        ("Install dependencies", ["ssh", host, f"{uv}cd {remote} && uv sync"]),
-        ("Prepare data", ["ssh", host, f"{uv}cd {remote} && uv run prepare.py"]),
     ]
+
+    # Add task-specific setup commands
+    for cmd in (setup_commands or []):
+        steps.append((cmd, ["ssh", host, f"{uv}cd {remote} && {cmd}"]))
 
     for desc, cmd in steps:
         print(f"  [{desc}]...", end=" ", flush=True)
@@ -323,9 +303,9 @@ def setup_slot(slot: GPUSlot, local_repo: str = "autoresearch") -> bool:
     return True
 
 
-def setup_fleet(slots: list[GPUSlot] | None = None, local_repo: str = "autoresearch"):
+def setup_fleet(slots: list[GPUSlot], source_dir: str = "autoresearch",
+                setup_commands: list[str] | None = None):
     """Set up all slots in the fleet. Runs once per unique (host, remote_dir) pair."""
-    slots = slots or FLEET
     seen: set[tuple[str, str]] = set()
     results = {}
     for slot in slots:
@@ -333,5 +313,5 @@ def setup_fleet(slots: list[GPUSlot] | None = None, local_repo: str = "autoresea
         if key in seen:
             continue
         seen.add(key)
-        results[slot.name] = setup_slot(slot, local_repo)
+        results[slot.name] = setup_slot(slot, source_dir, setup_commands)
     return results

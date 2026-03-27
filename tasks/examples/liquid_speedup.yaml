@@ -1,0 +1,62 @@
+task:
+  name: liquid-speedup
+
+  workspace:
+    source_dir: liquid
+    target_file: lib/liquid/template.py
+    remote_dir: ~/liquid-bench
+
+  execution:
+    run_command: "python3 benchmark/run.py 2>&1"
+    timeout: 300
+    needs_gpu: false
+    clear_torch_cache: false
+    setup_commands: []
+
+  scoring:
+    metric: combined_time_ms
+    direction: minimize
+    baseline: 100.0
+    parse_mode: key_value
+    metrics: [combined_time_ms, parse_time_ms, render_time_ms, allocations]
+    display_metrics: [parse_time_ms, render_time_ms, allocations]
+    degradation_threshold: 10.0
+    cacheable_crash_patterns:
+      - "SyntaxError"
+      - "LoadError"
+
+  prompt:
+    system: |-
+      You are optimizing Shopify's Liquid template engine for speed.
+
+      ## Your task
+      Modify lib/liquid/template.py to reduce combined_time_ms (combined parse + render time).
+      The benchmark processes 1000 templates. Lower combined_time_ms is better.
+
+      ## Rules
+      - You may ONLY modify lib/liquid/template.py.
+      - All existing tests must continue to pass.
+      - Focus on reducing object allocations and improving parse/render paths.
+
+      ## Workflow
+      1. Study the template engine internals and identify bottlenecks.
+      2. Make targeted edits using sed.
+      3. When complete, submit: echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT
+    instance: |-
+      ## Current {target_file}
+      ```{code_lang}
+      {file_content}
+      ```
+
+      Reduce combined parse+render time while maintaining correctness.
+    code_lang: python
+    file_marker: "## Current {target_file}"
+
+  feedback:
+    no_change: "No changes were made to template.py. Look for allocation hotspots and redundant parsing."
+    success: "SUCCESS: These changes reduced parse+render time. Continue optimizing for even more throughput."
+    failure: "These changes did not reduce parse+render time. Try targeting a different bottleneck."
+
+  fleet:
+    slots:
+      - {host: build-server, gpu_id: "0", name: cpu-0, remote_dir: ~/liquid-bench}

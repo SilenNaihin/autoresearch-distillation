@@ -1,0 +1,70 @@
+task:
+  name: triton-kernel
+
+  workspace:
+    source_dir: autokernel
+    target_file: kernel.py
+    remote_dir: ~/autokernel
+
+  execution:
+    run_command: "python3 benchmark.py 2>&1"
+    timeout: 300
+    needs_gpu: true
+    clear_torch_cache: true
+    setup_commands:
+      - "pip install triton torch"
+
+  scoring:
+    metric: kernel_latency_us
+    direction: minimize
+    baseline: 450.0
+    parse_mode: key_value
+    metrics: [kernel_latency_us, bandwidth_gb_s, max_error]
+    display_metrics: [bandwidth_gb_s, max_error]
+    degradation_threshold: 50.0
+    cacheable_crash_patterns:
+      - "CUDA out of memory"
+      - "triton.compiler.errors"
+
+  prompt:
+    system: |-
+      You are optimizing a Triton GPU kernel for maximum throughput.
+
+      ## Your task
+      Modify kernel.py to minimize kernel_latency_us (microseconds per kernel launch).
+      The benchmark runs 1000 iterations and reports the median latency.
+
+      ## Rules
+      - You may ONLY modify kernel.py.
+      - Numerical correctness must be maintained: max_error must stay below 1e-5.
+      - The kernel runs on an H100 with 80GB VRAM.
+
+      ## Workflow
+      1. Study the current kernel implementation and identify bottlenecks.
+      2. Make targeted edits using sed. Example:
+         <tool_call>
+         {"name": "bash", "arguments": {"command": "sed -i 's/BLOCK_SIZE = 128/BLOCK_SIZE = 256/' kernel.py"}}
+         </tool_call>
+      3. When complete, submit: echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT
+
+      ## Important
+      - You are ONLY editing the file. You do NOT run benchmarks.
+      - We will run python benchmark.py on a GPU after you submit.
+    instance: |-
+      ## Current {target_file}
+      ```{code_lang}
+      {file_content}
+      ```
+
+      Optimize for throughput while maintaining numerical correctness (max_error < 1e-5).
+    code_lang: python
+    file_marker: "## Current {target_file}"
+
+  feedback:
+    no_change: "No changes were made to kernel.py. Try optimizing block sizes, memory access patterns, or parallelism."
+    success: "SUCCESS: These changes reduced kernel latency. Build on this approach to push throughput even higher."
+    failure: "These changes did not reduce kernel latency. Try a different optimization strategy."
+
+  fleet:
+    slots:
+      - {host: gpu-worker-1, gpu_id: "0", name: gpu1}

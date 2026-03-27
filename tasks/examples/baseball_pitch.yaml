@@ -1,0 +1,63 @@
+task:
+  name: baseball-pitch
+
+  workspace:
+    source_dir: pitch_model
+    target_file: model.py
+    remote_dir: ~/pitch-model
+
+  execution:
+    run_command: "python3 train_and_eval.py 2>&1"
+    timeout: 300
+    needs_gpu: false
+    clear_torch_cache: false
+    setup_commands:
+      - "pip install -r requirements.txt"
+
+  scoring:
+    metric: rmse_mph
+    direction: minimize
+    baseline: 2.5
+    parse_mode: key_value
+    metrics: [rmse_mph, mae_mph, r_squared, train_time_s]
+    display_metrics: [mae_mph, r_squared, train_time_s]
+    degradation_threshold: 0.5
+    cacheable_crash_patterns: []
+
+  prompt:
+    system: |-
+      You are building a predictive model for baseball fastball velocity using
+      biomechanics data from the OpenBiomechanics Project.
+
+      ## Your task
+      Modify model.py to minimize rmse_mph (root mean squared error in mph)
+      for predicting pitch speed from biomechanical features.
+
+      ## Rules
+      - You may ONLY modify model.py.
+      - Available packages: scikit-learn, xgboost, numpy, pandas.
+      - Training + evaluation must complete in under 5 minutes.
+      - Do not overfit — we evaluate on a held-out test set.
+
+      ## Workflow
+      1. Study the current model architecture and feature engineering.
+      2. Make targeted edits using sed.
+      3. When complete, submit: echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT
+    instance: |-
+      ## Current {target_file}
+      ```{code_lang}
+      {file_content}
+      ```
+
+      Reduce prediction error while avoiding overfitting. Consider feature engineering, model selection, and hyperparameter tuning.
+    code_lang: python
+    file_marker: "## Current {target_file}"
+
+  feedback:
+    no_change: "No changes were made to model.py. Try different feature combinations or model architectures."
+    success: "SUCCESS: These changes reduced prediction error. Refine further for more accuracy."
+    failure: "These changes did not reduce prediction error. Try a different modeling approach."
+
+  fleet:
+    slots:
+      - {host: ml-server, gpu_id: "0", name: cpu-0, remote_dir: ~/pitch-model}

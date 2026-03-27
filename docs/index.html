@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Self-Distillation for Automated ML Research</title>
+  <title>RL Training for LLM Agents on Live Task Improvement Loops</title>
   <style>
     :root {
       --text: #1a1a1a;
@@ -202,7 +202,7 @@
 <div class="container">
 
   <header>
-    <h1>Self-Distillation for Automated ML Research</h1>
+    <h1>RL Training for LLM Agents on Live Task Improvement Loops</h1>
     <div class="authors">
       <a href="https://github.com/SilenNaihin">Silen Naihin</a> &nbsp;&middot;&nbsp;
       <a href="https://github.com/kfallah">Kion Fallah</a>
@@ -227,25 +227,98 @@
     <h2>Abstract</h2>
     <div class="abstract">
       <p>
-        We train <strong>Qwen3-14B</strong> to propose modifications to a GPT pretraining script to reduce
-        validation loss using <a href="https://self-distillation.github.io/SDPO.html">Self-Distillation Policy Optimization (SDPO)</a>.
-        Modified training scripts are run on H100 GPUs and natural language describing experimental outcomes 
-        is used as hindsight context for a teacher model which provides a reward signal to a student model. On <a href="https://github.com/karpathy/autoresearch">Karpathy's autoresearch</a>
-        benchmark, SDPO achieves <strong>val_bpb&nbsp;=&nbsp;1.028</strong> during training &mdash; and
+        We present a framework for training LLM agents via RL on <strong>any task improvement loop</strong>.
+        An agent proposes modifications to a target file, experiments execute on remote machines, and metric
+        outcomes drive policy updates through <a href="https://self-distillation.github.io/SDPO.html">SDPO</a>,
+        GRPO, or other RL algorithms. Tasks are defined as YAML configs &mdash; specifying what file to edit,
+        how to run experiments, and how to score results &mdash; making the system pluggable across domains:
+        ML pretraining, GPU kernel optimization, prompt engineering, code speedups, and more.
+      </p>
+      <p>
+        On our flagship task &mdash; <a href="https://github.com/karpathy/autoresearch">Karpathy's autoresearch</a>
+        benchmark &mdash; we train <strong>Qwen3-14B</strong> with SDPO to minimize validation loss on a GPT
+        pretraining script. SDPO achieves <strong>val_bpb&nbsp;=&nbsp;1.028</strong> during training and
         <strong>1.023</strong> when the trained checkpoint is evaluated with ICL, a 3.1% improvement
-        that surpasses the original 2.8% improvement from the Karpathy agent. We compare against
-        two baselines &mdash; multi-turn in-context learning and single-turn random exploration &mdash;
-        finding that context conditioning adds consistency without improving outcomes, while
-        weight updates improve the model's capabilities, leading to improvements not produced by the base model.
+        that surpasses the original 2.8% from the Karpathy agent. We find that context conditioning (ICL)
+        adds consistency without improving outcomes, while weight updates improve the model&rsquo;s
+        capabilities, leading to improvements not produced by the base model.
       </p>
     </div>
   </section>
 
   <hr>
 
+  <!-- Task system -->
+  <section>
+    <h2>Pluggable Task System</h2>
+    <p>
+      Every task-specific detail lives in a single YAML config: workspace, execution, scoring, prompts,
+      feedback templates, and fleet slots. The agent loops, SSH runners, and training pipeline are fully
+      generic &mdash; they read everything from the config at runtime.
+    </p>
+
+    <div class="table-wrapper">
+      <table>
+        <thead>
+          <tr><th>Task</th><th>Metric</th><th>Direction</th><th>Target File</th><th>GPU</th><th>Domain</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>autoresearch</strong></td>
+            <td><code>val_bpb</code></td>
+            <td>minimize</td>
+            <td><code>train.py</code></td>
+            <td>yes</td>
+            <td>ML pretraining</td>
+          </tr>
+          <tr>
+            <td>triton-kernel</td>
+            <td><code>kernel_latency_us</code></td>
+            <td>minimize</td>
+            <td><code>kernel.py</code></td>
+            <td>yes</td>
+            <td>GPU kernel optimization</td>
+          </tr>
+          <tr>
+            <td>baseball-pitch</td>
+            <td><code>rmse_mph</code></td>
+            <td>minimize</td>
+            <td><code>model.py</code></td>
+            <td>no</td>
+            <td>Tabular ML</td>
+          </tr>
+          <tr>
+            <td>voice-agent</td>
+            <td><code>eval_score</code></td>
+            <td>maximize</td>
+            <td><code>system_prompt.txt</code></td>
+            <td>no</td>
+            <td>Prompt engineering</td>
+          </tr>
+          <tr>
+            <td>liquid-speedup</td>
+            <td><code>combined_time_ms</code></td>
+            <td>minimize</td>
+            <td><code>template.py</code></td>
+            <td>no</td>
+            <td>Code optimization</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>
+      To add a new task: create a YAML config in <code>tasks/</code>, point it at a source directory
+      with the target file, and run <code>python test_task_config.py tasks/my_task.yaml</code> to verify.
+      All example tasks have been tested end-to-end on an A100.
+    </p>
+  </section>
+
+  <hr>
+
   <!-- Results chart -->
   <section>
-    <h2>Results</h2>
+    <h2>Autoresearch Results</h2>
     <p>
       Improvement in <code>val_bpb</code> (validation bits per byte, lower is better) over the unmodified
       <code>train.py</code> baseline. Larger bars = more improvement.
@@ -390,7 +463,7 @@
 
   <!-- Approaches -->
   <section>
-    <h2>Three Approaches</h2>
+    <h2>Three Approaches (Autoresearch)</h2>
 
     <h3>SDPO <span class="pill pill-rl">RL</span></h3>
     <p>
@@ -722,9 +795,8 @@
     <h2>Built On</h2>
     <p>
       <strong><a href="https://github.com/karpathy/autoresearch">Autoresearch</a></strong> (Karpathy) &mdash;
-      A single-file GPT pretraining script with Muon+Adam optimization, FlashAttention 3, and sliding window
-      attention. The benchmark: modify <code>train.py</code> to minimize <code>val_bpb</code> within a
-      5-minute training budget on a single H100.
+      A single-file GPT pretraining script. The flagship benchmark: modify <code>train.py</code> to minimize
+      <code>val_bpb</code> within a 5-minute training budget on a single H100.
     </p>
     <p>
       <strong><a href="https://self-distillation.github.io/SDPO.html">SDPO</a></strong>
@@ -732,7 +804,12 @@
       Self-Distillation Policy Optimization. Converts tokenized environment feedback into a dense
       learning signal by treating the current model conditioned on feedback as a self-teacher, then
       distilling its corrected next-token predictions back into the policy. We extend it with agentic
-      tool use and live environment rewards from real GPU experiments.
+      tool use and live environment rewards from real experiments.
+    </p>
+    <p>
+      <strong><a href="https://github.com/volcengine/verl">VERL</a></strong> &mdash;
+      RL training framework for LLMs. Our fork adds SDPO, agentic tool use, and multi-turn rollouts
+      with configurable task environments.
     </p>
   </section>
 
@@ -740,8 +817,8 @@
 
   <section>
     <h2>Citation</h2>
-    <pre><code>@misc{naihin2026sdpoautoresearch,
-  title   = {Self-Distillation for Automated ML Research},
+    <pre><code>@misc{naihin2026distillloop,
+  title   = {RL Training for LLM Agents on Live Task Improvement Loops},
   author  = {Naihin, Silen and Fallah, Kion},
   year    = {2026},
   url     = {https://github.com/SilenNaihin/autoresearch-distillation}

@@ -1,9 +1,10 @@
 """
-PUCT state reuse buffer for autoresearch SDPO training.
+PUCT state reuse buffer for SDPO/GRPO training.
 
-Maintains a search tree of train.py versions. Each state is a (code, val_bpb, reward)
-tuple with parent pointers. States are selected for exploration using PUCT scores,
-biasing toward high-reward states that haven't been explored much.
+Maintains a search tree of file versions (e.g. train.py, kernel.py, system_prompt.txt).
+Each state is a (content, metric_value, reward) tuple with parent pointers. States are
+selected for exploration using PUCT scores, biasing toward high-reward states that
+haven't been explored much.
 
 Disk-backed JSON with fcntl locking (same pattern as experiment_cache.py).
 """
@@ -37,18 +38,21 @@ def _flock_with_timeout(f, lock_type, timeout=FLOCK_TIMEOUT):
 
 
 class ReuseBuffer:
-    """PUCT-based state reuse buffer for train.py versions.
+    """PUCT-based state reuse buffer for file versions.
 
     Args:
         path: JSON file for persistent storage.
         c_puct: Exploration constant for PUCT formula.
         max_states: Maximum number of states before pruning.
+        direction: "minimize" or "maximize" — controls best metric comparison.
     """
 
-    def __init__(self, path: Path, c_puct: float = 1.0, max_states: int = 1000):
+    def __init__(self, path: Path, c_puct: float = 1.0, max_states: int = 1000,
+                 direction: str = "minimize"):
         self._path = Path(path)
         self._c_puct = c_puct
         self._max_states = max_states
+        self._direction = direction
         self._lock = threading.Lock()
         self._data: dict = {"next_id": 0, "total_visits": 0, "states": {}}
         self._load()
@@ -96,15 +100,15 @@ class ReuseBuffer:
         except Exception:
             logger.exception(f"Failed to write reuse buffer to {self._path}")
 
-    def seed(self, code: str, val_bpb: float) -> None:
+    def seed(self, content: str, metric_value: float) -> None:
         """Add seed state (id=0) if buffer is empty."""
         with self._lock:
             if self._data["states"]:
                 return
             self._data["states"]["0"] = {
                 "id": 0,
-                "code": code,
-                "val_bpb": val_bpb,
+                "content": content,
+                "metric_value": metric_value,
                 "reward": 0.0,
                 "parent_id": None,
                 "n_visits": 0,
@@ -126,15 +130,15 @@ class ReuseBuffer:
             current = states[pid]
         return ancestors
 
-    def add(self, code: str, val_bpb: float, reward: float, parent_id: int) -> int:
+    def add(self, content: str, metric_value: float, reward: float, parent_id: int) -> int:
         """Add a new state and propagate reward up ancestor chain. Returns new state id."""
         with self._lock:
             sid = self._data["next_id"]
             self._data["next_id"] = sid + 1
             self._data["states"][str(sid)] = {
                 "id": sid,
-                "code": code,
-                "val_bpb": val_bpb,
+                "content": content,
+                "metric_value": metric_value,
                 "reward": reward,
                 "parent_id": parent_id,
                 "n_visits": 0,
@@ -173,14 +177,13 @@ class ReuseBuffer:
         return scores
 
     def select(self, n: int) -> list[tuple[int, str]]:
-        """Pick n states by PUCT score, increment visits for state and ancestors. Returns [(id, code), ...]."""
+        """Pick n states by PUCT score, increment visits. Returns [(id, content), ...]."""
         with self._lock:
             states = self._data["states"]
             if not states:
                 return []
 
             scores = self._puct_scores()
-            # Sort by score descending, pick top n
             top_sids = sorted(scores.keys(), key=lambda s: scores[s], reverse=True)[:n]
 
             results = []
@@ -188,44 +191,55 @@ class ReuseBuffer:
                 state = states[sid]
                 state["n_visits"] += 1
                 self._data["total_visits"] += 1
-                # Propagate visit count up ancestor chain
                 for anc_sid in self._ancestors(sid):
                     states[anc_sid]["n_visits"] += 1
-                results.append((state["id"], state["code"]))
+                results.append((state["id"], state["content"]))
 
             self._save()
             return results
 
-    def find_by_code(self, code: str) -> dict | None:
-        """Look up a state by its exact code. Returns state dict or None."""
+    def find_by_content(self, content: str) -> dict | None:
+        """Look up a state by its exact content. Returns state dict or None."""
         with self._lock:
             for state in self._data["states"].values():
-                if state["code"] == code:
+                if state.get("content") == content:
                     return dict(state)  # copy
+                # Backward compat: old buffers use "code" key
+                if state.get("code") == content:
+                    return dict(state)
             return None
 
-    def get_best_val_bpb(self) -> float:
-        """Return minimum val_bpb across all states."""
+    def get_best_metric(self) -> float:
+        """Return best metric_value across all states (direction-aware)."""
         with self._lock:
             if not self._data["states"]:
-                return float("inf")
-            return min(s["val_bpb"] for s in self._data["states"].values())
+                if self._direction == "minimize":
+                    return float("inf")
+                return float("-inf")
+            values = []
+            for s in self._data["states"].values():
+                v = s.get("metric_value", s.get("val_bpb"))  # backward compat
+                if v is not None:
+                    values.append(v)
+            if not values:
+                if self._direction == "minimize":
+                    return float("inf")
+                return float("-inf")
+            if self._direction == "minimize":
+                return min(values)
+            return max(values)
 
     def _prune(self):
-        """Remove lowest-reward leaf states (no children) when over max_states. Never removes seed."""
+        """Remove lowest-reward leaf states when over max_states. Never removes seed."""
         states = self._data["states"]
         if len(states) <= self._max_states:
             return
 
-        # Find states that are parents (have children)
         parent_ids = {str(s["parent_id"]) for s in states.values() if s["parent_id"] is not None}
-
-        # Candidates for removal: not seed, not a parent
         candidates = [
             sid for sid in states
             if sid != "0" and sid not in parent_ids
         ]
-        # Sort by reward ascending (remove worst first)
         candidates.sort(key=lambda s: states[s]["reward"])
 
         to_remove = len(states) - self._max_states

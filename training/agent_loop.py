@@ -1,14 +1,16 @@
 """
-Custom agent loop for autoresearch SDPO training with multi-turn bash tool.
+Custom agent loop for SDPO training with multi-turn bash tool.
 
 Each rollout:
-  1. Model receives prompt (train.py + experiment history)
-  2. Model uses bash tool to read/edit train.py (multi-turn via ToolAgentLoop state machine)
+  1. Model receives prompt (target file + experiment history)
+  2. Model uses bash tool to read/edit target file (multi-turn via ToolAgentLoop state machine)
   3. Model submits via: echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT
-  4. We read modified train.py from the isolated workdir
+  4. We read modified target file from the isolated workdir
   5. We dispatch to GPU fleet via GPUPoolRunner
   6. We parse metrics, compute reward
   7. reward_score is set on AgentLoopOutput for RL training
+
+Generic — all task-specific config comes from TaskConfig.
 
 Extends VERL's ToolAgentLoop which implements the multi-turn state machine:
 PENDING → GENERATING → PROCESSING_TOOLS → GENERATING → ... → TERMINATED
@@ -23,15 +25,14 @@ import logging
 import os
 import sys
 import threading
-from difflib import unified_diff
 from pathlib import Path
 from typing import Any
 
-from lib.experiment_cache import SDPO_CACHE, ExperimentCache
+from lib.experiment_cache import ExperimentCache, cache_path_for, SDPO_CACHE
 from lib.reuse_buffer import ReuseBuffer
+from task_config import TaskConfig
 
-# Ensure SDPO's verl is importable
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "SDPO"))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "SDPO"))
 
 from verl.experimental.agent_loop.agent_loop import AgentLoopOutput, register
 from verl.experimental.agent_loop.tool_agent_loop import AgentState, ToolAgentLoop
@@ -49,26 +50,15 @@ _pool = None
 _pool_lock = threading.Lock()
 
 
-def _make_diff(baseline: str, modified: str) -> str:
-    """Generate a unified diff between baseline and modified train.py."""
-    if baseline == modified:
-        return "No changes were made to train.py."
-    return "".join(unified_diff(
-        baseline.splitlines(keepends=True),
-        modified.splitlines(keepends=True),
-        fromfile="a/train.py", tofile="b/train.py",
-    ))
-
-
-def _get_pool():
+def _get_pool(task: TaskConfig):
     """Lazily initialize the shared GPUPoolRunner."""
     global _pool
     if _pool is None:
         with _pool_lock:
             if _pool is None:
-                from lib.runners import GPUPoolRunner
-                _pool = GPUPoolRunner()
-                logger.info(f"Initialized GPUPoolRunner with {_pool.total} GPU slots")
+                from runners import GPUPoolRunner
+                _pool = GPUPoolRunner(task=task)
+                logger.info(f"Initialized GPUPoolRunner with {_pool.total} slots")
     return _pool
 
 
@@ -78,40 +68,47 @@ def _get_pool():
 
 _buffer = None
 _buffer_lock = threading.Lock()
-_buffer_kwargs: dict = {}  # set from agent loop __init__
+_buffer_kwargs: dict = {}
 
 
-def _get_buffer() -> ReuseBuffer:
+def _get_buffer(task: TaskConfig) -> ReuseBuffer:
     """Lazily initialize the shared ReuseBuffer singleton."""
     global _buffer
     if _buffer is None:
         with _buffer_lock:
             if _buffer is None:
-                _buffer = ReuseBuffer(Path("/data/reuse_buffer.json"), **_buffer_kwargs)
+                buf_path = Path(f"/data/reuse_buffer_{task.name}.json")
+                _buffer = ReuseBuffer(buf_path, direction=task.scoring.direction,
+                                      **_buffer_kwargs)
     return _buffer
 
 
 @register("autoresearch_agent")
 class AutoresearchAgentLoop(ToolAgentLoop):
-    """Multi-turn agent loop: bash editing → GPU experiment → reward.
+    """Multi-turn agent loop: bash editing → experiment dispatch → reward.
 
     Extends ToolAgentLoop to:
       1. Keep a persistent BashTool instance per trajectory (not per tool call)
-      2. After the model submits, dispatch modified train.py to GPU fleet
+      2. After the model submits, dispatch modified file to experiment fleet
       3. Compute reward from experiment results
     """
 
-    def __init__(self, *args, c_puct: float = 1.0, max_states: int = 1000, **kwargs):
+    def __init__(self, *args, c_puct: float = 1.0, max_states: int = 1000,
+                 task_config: str = "tasks/autoresearch.yaml", **kwargs):
         super().__init__(*args, **kwargs)
+        self.task = TaskConfig.from_yaml(task_config)
+
         global _buffer_kwargs
         _buffer_kwargs = {"c_puct": c_puct, "max_states": max_states}
 
-        self._sed_failed: str | None = None  # tracked but no longer triggers early termination
-        self._cache = ExperimentCache(write_path=SDPO_CACHE)
+        self._sed_failed: str | None = None
+        self._cache = ExperimentCache(
+            write_path=cache_path_for(self.task.name, "sdpo"),
+            direction=self.task.scoring.direction,
+        )
 
     async def run(self, sampling_params: dict[str, Any], **kwargs) -> AgentLoopOutput:
         """Override run() to add pre-creation and post-submission logic."""
-        # Validate that VERL forwarded the step number
         global_step = kwargs.get("global_step")
         assert global_step is not None and global_step >= 0, (
             f"global_step not forwarded to agent loop (got {global_step!r}). "
@@ -119,43 +116,44 @@ class AutoresearchAgentLoop(ToolAgentLoop):
         )
         self._global_step = global_step
 
-        # Reset per-trajectory tool call stats
         self._total_tool_calls = 0
-        self._failed_tool_calls = 0  # malformed JSON, errors
-        self._noop_tool_calls = 0    # commands that don't touch train.py
+        self._failed_tool_calls = 0
+        self._noop_tool_calls = 0
         self._sed_failed = None
 
-        # Select a state from the reuse buffer for this rollout
-        from training.prompts import replace_train_py_in_prompt
-        from lib.environment import BASELINE_VAL_BPB
+        task = self.task
+        target_file = task.workspace.target_file
 
-        buffer = _get_buffer()
-        # Seed with baseline train.py if buffer is empty
+        buffer = _get_buffer(task)
         bash_tool = self.tools.get("bash")
+
+        # Seed with baseline file if buffer is empty
         if bash_tool and len(buffer) == 0:
-            baseline_code = Path(bash_tool.autoresearch_dir, "train.py").read_text()
-            buffer.seed(baseline_code, BASELINE_VAL_BPB)
+            baseline_code = Path(bash_tool.source_dir, target_file).read_text()
+            buffer.seed(baseline_code, task.scoring.baseline)
 
         # Store original baseline for cache keying (state 0 = seed)
-        self._baseline_code = buffer._data["states"].get("0", {}).get("code", "")
+        self._baseline_code = buffer._data["states"].get("0", {}).get(
+            "content", buffer._data["states"].get("0", {}).get("code", ""))
 
         selections = buffer.select(1)
         if selections:
             self._parent_id, self._selected_code = selections[0]
         else:
-            # Fallback: use baseline directly
             self._parent_id = 0
-            self._selected_code = Path(bash_tool.autoresearch_dir, "train.py").read_text() if bash_tool else ""
+            self._selected_code = Path(bash_tool.source_dir, target_file).read_text() if bash_tool else ""
 
-        # Replace train.py in prompt with the selected state's code
+        # Replace target file in prompt with the selected state's content
         if "raw_prompt" in kwargs:
-            kwargs["raw_prompt"] = list(kwargs["raw_prompt"])  # don't mutate dataset
+            kwargs["raw_prompt"] = list(kwargs["raw_prompt"])
             last_msg = dict(kwargs["raw_prompt"][-1])
-            last_msg["content"] = replace_train_py_in_prompt(last_msg["content"], self._selected_code)
-            # Append best val_bpb target if better than baseline
-            best_bpb = buffer.get_best_val_bpb()
-            if best_bpb < BASELINE_VAL_BPB:
-                last_msg["content"] += f"\n\n## Best val_bpb achieved so far: {best_bpb:.6f} (baseline={BASELINE_VAL_BPB})"
+            last_msg["content"] = task.replace_file_in_prompt(last_msg["content"], self._selected_code)
+            # Append best metric target if better than baseline
+            best = buffer.get_best_metric()
+            if task.is_improvement(best):
+                metric = task.scoring.metric
+                baseline = task.scoring.baseline
+                last_msg["content"] += f"\n\n## Best {metric} achieved so far: {best:.6f} (baseline={baseline})"
             kwargs["raw_prompt"][-1] = last_msg
 
         # Pre-create persistent bash tool instance
@@ -163,22 +161,18 @@ class AutoresearchAgentLoop(ToolAgentLoop):
 
         if bash_tool:
             instance_id, _ = await bash_tool.create()
-            # Overwrite workdir train.py with the selected state's code
             workdir = bash_tool.get_workdir(instance_id)
             if workdir and self._selected_code:
-                Path(workdir, "train.py").write_text(self._selected_code)
-            # Store instance_id where _call_tool can find it
+                Path(workdir, target_file).write_text(self._selected_code)
             kwargs.setdefault("tools_kwargs", {})
             kwargs["tools_kwargs"]["_bash_instance_id"] = instance_id
 
         try:
-            # Run the standard ToolAgentLoop state machine
             output = await super().run(sampling_params, **kwargs)
 
-            # Detect empty chain of thought (e.g. "<think>\n</think>")
+            # Detect empty chain of thought
             self._empty_thinking = False
             try:
-                # Decode just the first 50 tokens to check for thinking
                 prefix = self.tokenizer.decode(output.response_ids[:50], skip_special_tokens=False)
                 think_start = prefix.find("<think>")
                 think_end = prefix.find("</think>")
@@ -188,27 +182,23 @@ class AutoresearchAgentLoop(ToolAgentLoop):
             except Exception:
                 pass
 
-            # Post-submission: dispatch experiment to GPU fleet
+            # Post-submission: dispatch experiment
             reward, feedback = await self._dispatch_experiment(bash_tool, instance_id)
             output.reward_score = reward
-            # Pack env metrics from the last dispatch for wandb logging
+
+            # Pack env metrics for wandb logging
             env_metrics = {}
-            for k in ("val_bpb", "peak_vram_mb", "training_seconds", "total_seconds",
-                      "mfu_percent", "total_tokens_M", "num_steps", "num_params_M", "depth"):
+            for k in task.scoring.metrics:
                 env_metrics[f"env_{k}"] = float(getattr(self, '_last_env_metrics', {}).get(k, float('nan')))
             env_metrics["env_novel"] = self._is_novel
             output.extra_fields["reward_extra_info"] = {"feedback": feedback, "parent_id": int(self._parent_id), **env_metrics}
 
-            # Store modified raw_prompt under a separate key so the teacher prompt
-            # uses the same (buffer-selected) train.py as the student rollout.
-            # We can't overwrite "raw_prompt" because _agent_loop_postprocess sets it
-            # from the caller's kwargs (which has the original, unmodified prompt).
+            # Store modified raw_prompt so teacher prompt uses the same file version
             if "raw_prompt" in kwargs:
                 output.extra_fields["agent_raw_prompt"] = kwargs["raw_prompt"]
 
             return output
         finally:
-            # Clean up workdir
             if bash_tool and instance_id:
                 await bash_tool.release(instance_id)
 
@@ -221,7 +211,7 @@ class AutoresearchAgentLoop(ToolAgentLoop):
             return AgentState.TERMINATED
         return state
 
-    _TRAIN_PY_CMDS = ("sed", "cat", "echo", "python", "python3", "printf", "tee", "patch")
+    _EDIT_CMDS = ("sed", "cat", "echo", "python", "python3", "printf", "tee", "patch")
 
     async def _call_tool(
         self, tool_call: FunctionCall, tools_kwargs: dict[str, Any], agent_data
@@ -248,17 +238,16 @@ class AutoresearchAgentLoop(ToolAgentLoop):
             try:
                 self._total_tool_calls += 1
                 cmd = tool_args.get("command", "")
-                # Track commands that likely don't modify train.py
+                target_file = self.task.workspace.target_file
                 cmd_stripped = cmd.strip().split()[0] if cmd.strip() else ""
-                if cmd_stripped and cmd_stripped not in self._TRAIN_PY_CMDS and "train.py" not in cmd:
+                if cmd_stripped and cmd_stripped not in self._EDIT_CMDS and target_file not in cmd:
                     self._noop_tool_calls += 1
 
                 response, reward, metrics = await bash_tool.execute(
                     instance_id, tool_args, agent_data=agent_data
                 )
 
-                # Detect sed failures (no input files, bad expression, etc.)
-                # All sed errors produce output starting with "sed:"; success is silent.
+                # Detect sed failures
                 resp_text = (response.text or "").strip()
                 if cmd_stripped == "sed" and "sed:" in resp_text:
                     self._sed_failed = resp_text
@@ -280,79 +269,75 @@ class AutoresearchAgentLoop(ToolAgentLoop):
                 logger.warning(f"Error when executing bash tool: {e}")
                 return ToolResponse(text=f"Error when executing tool: {e}"), 0.0, {}
         else:
-            # For any other tool, use default create/execute/release per call
             return await super()._call_tool(tool_call, tools_kwargs, agent_data)
 
     async def _dispatch_experiment(self, bash_tool, instance_id: str | None) -> tuple[float, str]:
-        """Read modified train.py, dispatch to GPU fleet, compute reward.
+        """Read modified file, dispatch to fleet, compute reward.
 
         Returns (reward, feedback) tuple. Feedback is passed through to SDPO's
         self-distillation pipeline via extra_fields["reward_extra_info"]["feedback"].
         """
         self._is_novel = 0.0
+        task = self.task
+        metric_name = task.scoring.metric
 
         if bash_tool is None or instance_id is None:
             return 0.0, "No bash tool or instance available."
 
-        modified = bash_tool.read_train_py(instance_id)
+        modified = bash_tool.read_target_file(instance_id)
         if modified is None:
-            logger.warning(f"No modified train.py found for instance {instance_id}")
-            return 0.0, "No modified train.py found."
+            logger.warning(f"No modified {task.workspace.target_file} found for instance {instance_id}")
+            return 0.0, f"No modified {task.workspace.target_file} found."
 
-        # Two diffs: cache_diff keys on original baseline (same final code = same result),
-        # feedback_diff shows what the model changed relative to the selected parent state
-        cache_diff = _make_diff(self._baseline_code, modified)
-        feedback_diff = _make_diff(self._selected_code, modified)
-
-        from lib.environment import BASELINE_VAL_BPB, compute_reward, parse_metrics
+        # Two diffs: cache_diff keys on original baseline, feedback_diff shows changes from selected parent
+        cache_diff = task.make_diff(self._baseline_code, modified)
+        feedback_diff = task.make_diff(self._selected_code, modified)
 
         if self._selected_code == modified:
             if self._sed_failed:
-                feedback = (f"FAILURE: your sed command failed: {self._sed_failed}\n\n"
-                            "You must specify the target file and ensure the pattern matches exactly.")
+                feedback = task.fmt_feedback("sed_failed", error=self._sed_failed)
             else:
-                feedback = "No changes were made to train.py. You must make new creative edits to reduce validation loss."
+                feedback = task.feedback.no_change
             return 0.0, feedback
 
-        # Check reuse buffer — if this exact code is already a known state, skip GPU
-        buffer = _get_buffer()
-        known = buffer.find_by_code(modified)
+        # Check reuse buffer — if this exact content is already known, skip dispatch
+        buffer = _get_buffer(task)
+        known = buffer.find_by_content(modified)
         if known is not None:
+            mv = known.get("metric_value", known.get("val_bpb"))
             feedback = (f"Changes from previous attempt:\n{feedback_diff}\n\n"
-                        f"This code has already been evaluated: val_bpb={known['val_bpb']:.6f}.\n"
-                        "Do not re-attempt this change.")
+                        f"{task.fmt_feedback('duplicate', value=f'{mv:.6f}')}")
             return known["reward"], feedback
 
-        # Check experiment cache — only used to skip GPU dispatch, no feedback stored
+        # Check experiment cache
         cached = self._cache.get(cache_diff, current_step=self._global_step)
         if cached is not None:
-            # Reconstruct reward and feedback from cached raw data
             if cached.get("crashed"):
                 feedback = (f"Changes from previous attempt:\n{feedback_diff}\n\n"
                             f"These changes caused the experiment to crash:\n{cached['tail']}\n\n"
-                            "Do not re-attempt this change.")
+                            f"{task.feedback.crash}")
                 return 0.0, feedback
-            val_bpb = cached["val_bpb"]
-            reward, status, reward_feedback = compute_reward(val_bpb)
-            metrics_line = cached.get("metrics_line", "")
-            degradation = val_bpb - BASELINE_VAL_BPB
-            if degradation > 0.05:
-                reward_feedback += f" These changes made validation loss significantly worse (degraded by {degradation:.6f})."
-            feedback = f"Changes from previous attempt:\n{feedback_diff}\n\n{reward_feedback}\n{metrics_line}"
-            if reward > 0:
-                # Ensure successful code is in the buffer (cache persists across runs, buffer doesn't)
-                if buffer.find_by_code(modified) is None:
-                    buffer.add(modified, val_bpb, reward, self._parent_id)
-                return reward, f"{feedback}\n\nSUCCESS: These changes reduced validation loss. This is a good result. Repeat this approach and combine it with additional modifications to reduce validation loss further."
-            return reward, f"{feedback}\n\nThese changes did not reduce validation loss. Continue exploring new and creative modifications that reduce validation loss."
+            val = cached.get("val_bpb", cached.get("metric_value"))
+            if val is not None:
+                reward, status, reward_feedback = task.compute_reward(val)
+                metrics_line = cached.get("metrics_line", "")
+                deg = task.check_degradation(val)
+                if deg:
+                    reward_feedback += f" {deg}"
+                feedback = f"Changes from previous attempt:\n{feedback_diff}\n\n{reward_feedback}\n{metrics_line}"
+                if reward > 0:
+                    if buffer.find_by_content(modified) is None:
+                        buffer.add(modified, val, reward, self._parent_id)
+                    return reward, f"{feedback}\n\n{task.feedback.success}"
+                return reward, f"{feedback}\n\n{task.feedback.failure}"
 
-        # Dispatch to GPU fleet (blocking I/O → run in thread)
+        # Dispatch to fleet (blocking I/O → run in thread)
         self._is_novel = 1.0
-        pool = _get_pool()
+        pool = _get_pool(task)
         output = await asyncio.to_thread(pool.run, modified)
 
-        # Parse whatever metrics are available (even on crash, stdout may have partial output)
-        metrics = parse_metrics(output.stdout) if output.stdout else {}
+        # Parse metrics
+        metrics = task.parse_metrics(output.stdout) if output.stdout else {}
         self._last_env_metrics = metrics
 
         if output.returncode != 0:
@@ -365,34 +350,34 @@ class AutoresearchAgentLoop(ToolAgentLoop):
             logger.warning(f"Experiment crashed (exit {output.returncode}): {crash_info}")
             feedback = (f"Changes from previous attempt:\n{feedback_diff}\n\n"
                         f"These changes caused the experiment to crash (exit {output.returncode}):\n{crash_info}")
-            # Cache CUDA OOMs (deterministic), but not transient crashes (SSH, segfault)
-            if "CUDA out of memory" in crash_info:
+            if task.is_cacheable_crash(crash_info):
                 self._cache.put(cache_diff, {"crashed": True, "tail": crash_info}, step=self._global_step)
-            return 0.0, f"{feedback}\n\nDo not re-attempt this change."
+            return 0.0, f"{feedback}\n\n{task.feedback.crash}"
 
-        val_bpb = metrics.get("val_bpb")
+        val = metrics.get(metric_name)
 
-        if val_bpb is None:
+        if val is None:
             tail = "\n".join(output.stdout.strip().splitlines()[-20:]) if output.stdout else "empty output"
-            logger.warning(f"No val_bpb in experiment output. Tail:\n{tail}")
+            logger.warning(f"No {metric_name} in experiment output. Tail:\n{tail}")
             feedback = (f"Changes from previous attempt:\n{feedback_diff}\n\n"
                         f"We were not able to run your experiment. Output tail:\n{tail}")
             return 0.0, feedback
 
-        reward, status, reward_feedback = compute_reward(val_bpb)
+        reward, status, reward_feedback = task.compute_reward(val)
 
-        logger.info(f"Experiment: val_bpb={val_bpb}, reward={reward:.4f}, status={status}")
-        metrics_line = " | ".join(f"{k}: {metrics[k]:g}" for k in ("num_steps", "num_params_M", "peak_vram_mb", "mfu_percent"))
-        degradation = val_bpb - BASELINE_VAL_BPB
-        if degradation > 0.05:
-            reward_feedback += f" These changes made validation loss significantly worse (degraded by {degradation:.6f})."
+        logger.info(f"Experiment: {metric_name}={val}, reward={reward:.4f}, status={status}")
+        display = task.scoring.display_metrics
+        metrics_line = " | ".join(f"{k}: {metrics[k]:g}" for k in display if k in metrics)
+        deg = task.check_degradation(val)
+        if deg:
+            reward_feedback += f" {deg}"
 
         feedback = f"Changes from previous attempt:\n{feedback_diff}\n\n{reward_feedback}\n{metrics_line}"
 
-        # Cache raw data for future dedup
-        self._cache.put(cache_diff, {"val_bpb": val_bpb, "metrics_line": metrics_line},
-                        step=self._global_step, val_bpb=val_bpb, diff_text_raw=cache_diff)
+        # Cache for future dedup
+        self._cache.put(cache_diff, {"val_bpb": val, "metric_value": val, "metrics_line": metrics_line},
+                        step=self._global_step, metric_value=val, diff_text_raw=cache_diff)
         if reward > 0:
-            buffer.add(modified, val_bpb, reward, self._parent_id)
-            return reward, f"{feedback}\n\nSUCCESS: These changes reduced validation loss. This is a good result. Repeat this approach and combine it with additional modifications to reduce validation loss further."
-        return reward, f"{feedback}\n\nThese changes did not reduce validation loss. Continue exploring new and creative modifications that reduce validation loss."
+            buffer.add(modified, val, reward, self._parent_id)
+            return reward, f"{feedback}\n\n{task.feedback.success}"
+        return reward, f"{feedback}\n\n{task.feedback.failure}"
