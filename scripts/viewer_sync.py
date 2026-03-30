@@ -1,351 +1,495 @@
 #!/usr/bin/env python3
-"""SSH discovery, sync, and local serve for GAIA2 viewer data.
+"""Discover, sync, and serve GAIA2 viewer data from GPU boxes.
+
+Single command to get the viewer running with all available baseline and
+training run data. Discovers ARE benchmark output directories on remote
+boxes, converts them to viewer format, and starts the Next.js dev server.
 
 Usage:
-    python scripts/viewer_sync.py [--serve] [--config scripts/viewer_config.yaml]
+    python scripts/viewer_sync.py --serve        # sync + start viewer
+    python scripts/viewer_sync.py                # sync only
+    python scripts/viewer_sync.py --full         # sync including all detail files
 """
+
+from __future__ import annotations
 
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
-import threading
 import webbrowser
-from functools import partial
-from http.server import HTTPServer, SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-import yaml
+try:
+    import yaml
+except ImportError:
+    print("Install pyyaml: pip install pyyaml")
+    sys.exit(1)
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent
-VIEWER_DIR = REPO_ROOT / "viewer"
-VIEWER_DATA_DIR = VIEWER_DIR / "data"
+VIEWER_DATA = REPO_ROOT / "viewer" / "public" / "data"
+CATEGORIES = ["search", "time", "execution", "adaptability", "ambiguity"]
 
 
-def load_config(config_path: str) -> dict:
-    with open(config_path) as f:
+def load_config(path: str) -> dict:
+    with open(path) as f:
         return yaml.safe_load(f)
 
 
 def ssh_run(host: str, cmd: str, timeout: int = 15) -> str | None:
-    """Run a command over SSH, return stdout or None on failure."""
     try:
-        result = subprocess.run(
+        r = subprocess.run(
             ["ssh", "-o", "ConnectTimeout=5", "-o", "BatchMode=yes", host, cmd],
-            capture_output=True,
-            text=True,
-            timeout=timeout,
+            capture_output=True, text=True, timeout=timeout,
         )
-        if result.returncode == 0:
-            return result.stdout.strip()
-        return None
+        return r.stdout.strip() if r.returncode == 0 else None
     except (subprocess.TimeoutExpired, Exception):
         return None
 
 
-def scp_file(host: str, remote_path: str, local_path: str) -> bool:
-    """Copy a file from remote to local via scp."""
-    Path(local_path).parent.mkdir(parents=True, exist_ok=True)
+def ssh_read_json(host: str, path: str) -> dict | list | None:
+    raw = ssh_run(host, f"cat {path}", timeout=30)
+    if raw:
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError:
+            pass
+    return None
+
+
+def ssh_read_jsonl(host: str, path: str) -> list[dict]:
+    raw = ssh_run(host, f"cat {path}", timeout=30)
+    if not raw:
+        return []
+    results = []
+    for line in raw.strip().split("\n"):
+        if line.strip():
+            try:
+                results.append(json.loads(line))
+            except json.JSONDecodeError:
+                pass
+    return results
+
+
+def scp_file(host: str, remote: str, local: str) -> bool:
+    Path(local).parent.mkdir(parents=True, exist_ok=True)
     try:
-        result = subprocess.run(
+        r = subprocess.run(
             ["scp", "-o", "ConnectTimeout=5", "-o", "BatchMode=yes",
-             f"{host}:{remote_path}", local_path],
-            capture_output=True,
-            text=True,
-            timeout=30,
+             f"{host}:{remote}", local],
+            capture_output=True, text=True, timeout=60,
         )
-        return result.returncode == 0
+        return r.returncode == 0
     except (subprocess.TimeoutExpired, Exception):
         return False
 
 
-def remote_mtime(host: str, path: str) -> float:
-    """Get mtime of a remote file as epoch seconds."""
-    out = ssh_run(host, f"stat -c %Y {path} 2>/dev/null || stat -f %m {path} 2>/dev/null")
-    if out:
-        try:
-            return float(out.strip().splitlines()[-1])
-        except ValueError:
-            pass
-    return 0.0
+def slugify(text: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
 
 
-def discover_runs(config: dict) -> list[dict]:
-    """SSH to each box to find summary.json files and run metadata."""
+# ---------------------------------------------------------------------------
+# Discovery: find ARE benchmark runs on remote boxes
+# ---------------------------------------------------------------------------
+
+def discover_are_runs(config: dict) -> list[dict]:
+    """Find ARE benchmark run directories by looking for output.jsonl files."""
     discovered = []
 
     for box in config.get("boxes", []):
         host = box["ssh_host"]
         data_paths = box.get("data_paths", [])
-        print(f"Discovering on {host}...")
+        print(f"  {host}...", end="", flush=True)
 
-        # Find summary.json files
-        find_parts = []
-        for dp in data_paths:
-            find_parts.append(f"find {dp} -name summary.json -maxdepth 4 2>/dev/null")
-        find_cmd = " ; ".join(find_parts)
-        output = ssh_run(host, find_cmd, timeout=20)
+        # Check connectivity
+        if ssh_run(host, "echo ok", timeout=5) is None:
+            print(" unreachable")
+            continue
 
-        summaries = []
-        if output:
-            summaries = [line.strip() for line in output.splitlines() if line.strip()]
+        # Find output.jsonl files (ARE benchmark output marker)
+        find_cmds = [f"find {dp} -name output.jsonl -maxdepth 6 2>/dev/null" for dp in data_paths]
+        raw = ssh_run(host, " ; ".join(find_cmds), timeout=20)
+        if not raw:
+            print(" no runs found")
+            continue
 
-        # Check for active scaffold processes
-        active_out = ssh_run(host, "pgrep -f gaia2_scaffold -c 2>/dev/null || echo 0")
-        is_active = False
-        if active_out:
-            try:
-                is_active = int(active_out.strip()) > 0
-            except ValueError:
-                pass
+        # Group by run directory (parent of category dir)
+        # Structure: .../ModelName/timestamp_full/category/output.jsonl
+        run_dirs: dict[str, list[str]] = {}
+        for line in raw.strip().split("\n"):
+            line = line.strip()
+            if not line:
+                continue
+            cat_dir = str(Path(line).parent)
+            cat_name = Path(cat_dir).name
+            if cat_name in CATEGORIES:
+                run_dir = str(Path(cat_dir).parent)
+                run_dirs.setdefault(run_dir, []).append(cat_name)
 
-        for summary_path in summaries:
-            # Derive run_id from path: .../runs/<run_id>/summary.json
-            parts = Path(summary_path).parts
-            run_id = None
-            for i, part in enumerate(parts):
-                if part == "runs" and i + 1 < len(parts):
-                    run_id = parts[i + 1]
-                    break
-
-            if not run_id:
-                # Fallback: use parent directory name
-                run_id = Path(summary_path).parent.name
-
-            # Check for .wandb_url file
-            wandb_url = None
-            wandb_path = str(Path(summary_path).parent / ".wandb_url")
-            wandb_out = ssh_run(host, f"cat {wandb_path} 2>/dev/null")
-            if wandb_out:
-                wandb_url = wandb_out.strip()
+        for run_dir, cats in run_dirs.items():
+            # Derive model name from path
+            # e.g. /data/gaia2_baselines/Qwen3-14B/20260329_200215_full
+            parts = Path(run_dir).parts
+            # Model name is typically 2 levels up from the timestamp dir
+            model_name = parts[-2] if len(parts) >= 2 else parts[-1]
+            timestamp = parts[-1] if len(parts) >= 1 else ""
 
             discovered.append({
-                "run_id": run_id,
                 "host": host,
-                "remote_summary": summary_path,
-                "wandb_url": wandb_url,
-                "is_active": is_active,
+                "remote_dir": run_dir,
+                "model_name": model_name,
+                "timestamp": timestamp,
+                "categories": sorted(cats),
             })
 
-    print(f"Discovered {len(discovered)} runs across {len(config.get('boxes', []))} boxes")
+        print(f" {len(run_dirs)} run(s)")
+
     return discovered
 
 
-def sync_runs(discovered: list[dict]) -> list[dict]:
-    """Sync summary.json files from remote to local, only if remote is newer."""
-    synced = []
+# ---------------------------------------------------------------------------
+# Conversion: ARE output → viewer format
+# ---------------------------------------------------------------------------
 
-    for run in discovered:
-        run_id = run["run_id"]
-        host = run["host"]
-        remote_path = run["remote_summary"]
+def convert_run(host: str, remote_dir: str, model_name: str, categories: list[str],
+                run_id: str, fetch_details: bool = False) -> dict | None:
+    """Convert an ARE benchmark run to viewer summary format.
 
-        local_dir = VIEWER_DATA_DIR / "runs" / run_id
-        local_summary = local_dir / "summary.json"
+    Pulls output.jsonl per category (small) to build the summary.
+    Detail files (lite traces) are fetched only if fetch_details=True.
+    """
+    run_dir = VIEWER_DATA / "runs" / run_id
+    summary_path = run_dir / "summary.json"
 
-        # Check if we need to sync
-        needs_sync = True
-        if local_summary.exists():
-            local_mt = local_summary.stat().st_mtime
-            remote_mt = remote_mtime(host, remote_path)
-            if remote_mt > 0 and remote_mt <= local_mt:
-                needs_sync = False
+    # Skip if already converted and not requesting full detail sync
+    if summary_path.exists() and not fetch_details:
+        summary = json.loads(summary_path.read_text())
+        print(f"    {run_id}: already synced ({len(summary.get('scenarios', []))} scenarios)")
+        return summary
 
-        if needs_sync:
-            print(f"  Syncing {run_id} from {host}...")
-            ok = scp_file(host, remote_path, str(local_summary))
-            if ok:
-                synced.append(run)
-                print(f"    OK")
-            else:
-                print(f"    FAILED to scp {remote_path}")
-        else:
-            synced.append(run)
+    print(f"    {run_id}: syncing from {host}...")
 
-    return synced
+    all_scenarios = []
+    all_details = []
+
+    for cat in categories:
+        results = ssh_read_jsonl(host, f"{remote_dir}/{cat}/output.jsonl")
+        if not results:
+            continue
+
+        # Get lite trace file list for detail mapping
+        trace_list_raw = ssh_run(host, f"ls {remote_dir}/{cat}/lite/ 2>/dev/null")
+        trace_map = {}
+        if trace_list_raw:
+            for tf in trace_list_raw.strip().split("\n"):
+                tf = tf.strip()
+                if tf.endswith(".json"):
+                    sid = "_".join(tf.replace(".json", "").split("_")[:-1])
+                    trace_map[sid] = tf
+
+        passed = 0
+        for r in results:
+            scenario_id = r.get("task_id", r.get("metadata", {}).get("scenario_id", ""))
+            score = r.get("score", 0)
+            meta = r.get("metadata", {})
+            is_pass = score > 0 and meta.get("status") == "success"
+            if is_pass:
+                passed += 1
+
+            all_scenarios.append({
+                "scenario_id": scenario_id,
+                "category": cat,
+                "passed": is_pass,
+                "tool_score": score,
+                "failure_type": "success" if is_pass else meta.get("status", "failed"),
+                "n_tool_calls": 0,
+                "n_messages": 0,
+                "duration_s": 0,
+                "n_format_errors": 0,
+                "n_think_leaks": 0,
+                "tool_efficiency": 0,
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+            })
+
+            # Store enough info to lazily fetch detail later
+            all_details.append({
+                "scenario_id": scenario_id,
+                "category": cat,
+                "remote_trace": f"{remote_dir}/{cat}/lite/{trace_map.get(scenario_id, '')}",
+                "has_trace": scenario_id in trace_map,
+                "score": score,
+                "is_pass": is_pass,
+                "rationale": meta.get("rationale", "") or "",
+            })
+
+        print(f"      {cat}: {len(results)} scenarios, {passed} passed")
+
+    if not all_scenarios:
+        return None
+
+    # Compute aggregates
+    total = len(all_scenarios)
+    total_passed = sum(1 for s in all_scenarios if s["passed"])
+    scores = [s["tool_score"] for s in all_scenarios]
+
+    by_category = {}
+    for cat in CATEGORIES:
+        cat_s = [s for s in all_scenarios if s["category"] == cat]
+        if cat_s:
+            cat_passed = sum(1 for s in cat_s if s["passed"])
+            cat_scores = [s["tool_score"] for s in cat_s]
+            by_category[cat] = {
+                "n": len(cat_s),
+                "pass_rate": cat_passed / len(cat_s),
+                "avg_tool_score": sum(cat_scores) / len(cat_scores),
+            }
+
+    failure_types = {}
+    for s in all_scenarios:
+        ft = s["failure_type"]
+        failure_types[ft] = failure_types.get(ft, 0) + 1
+
+    summary = {
+        "run_id": run_id,
+        "model_name": model_name,
+        "training_step": None,
+        "timestamp": "2026-03-29T20:00:00Z",
+        "aggregates": {
+            "overall": {
+                "n": total,
+                "pass_rate": total_passed / max(total, 1),
+                "avg_tool_score": sum(scores) / max(len(scores), 1),
+            },
+            "by_category": by_category,
+            "failure_types": failure_types,
+            "top_missing_tools": [],
+        },
+        "scenarios": all_scenarios,
+    }
+
+    # Write summary
+    run_dir.mkdir(parents=True, exist_ok=True)
+    summary_path.write_text(json.dumps(summary, indent=2))
+
+    # Write a manifest so the detail API route can lazily fetch traces
+    manifest = {d["scenario_id"]: {
+        "host": host,
+        "remote_trace": d["remote_trace"],
+        "has_trace": d["has_trace"],
+        "category": d["category"],
+        "score": d["score"],
+        "is_pass": d["is_pass"],
+        "rationale": d["rationale"],
+    } for d in all_details}
+    (run_dir / ".manifest.json").write_text(json.dumps(manifest))
+
+    # Optionally fetch all detail files
+    if fetch_details:
+        fetch_all_details(host, run_id, all_details)
+
+    return summary
 
 
-def generate_index(discovered: list[dict]) -> None:
-    """Create viewer/data/index.json from all synced summaries."""
-    runs_dir = VIEWER_DATA_DIR / "runs"
+def fetch_all_details(host: str, run_id: str, details: list[dict]):
+    """Pull all lite trace files for a run."""
+    details_dir = VIEWER_DATA / "runs" / run_id / "details"
+    details_dir.mkdir(parents=True, exist_ok=True)
+
+    fetched = 0
+    for d in details:
+        if not d["has_trace"]:
+            continue
+        local_path = details_dir / f"{d['scenario_id']}.json"
+        if local_path.exists():
+            continue
+        if scp_file(host, d["remote_trace"], str(local_path)):
+            # Convert lite trace to viewer detail format
+            try:
+                convert_lite_trace(local_path, d)
+            except Exception:
+                pass
+            fetched += 1
+
+    print(f"      Fetched {fetched} detail files")
+
+
+def fetch_single_detail(run_id: str, scenario_id: str) -> bool:
+    """Lazily fetch a single detail file from the remote box."""
+    run_dir = VIEWER_DATA / "runs" / run_id
+    manifest_path = run_dir / ".manifest.json"
+    if not manifest_path.exists():
+        return False
+
+    manifest = json.loads(manifest_path.read_text())
+    info = manifest.get(scenario_id)
+    if not info or not info.get("has_trace"):
+        return False
+
+    details_dir = run_dir / "details"
+    details_dir.mkdir(parents=True, exist_ok=True)
+    local_path = details_dir / f"{scenario_id}.json"
+
+    # SCP the lite trace
+    tmp_path = str(local_path) + ".tmp"
+    if not scp_file(info["host"], info["remote_trace"], tmp_path):
+        return False
+
+    # Convert to viewer detail format
+    try:
+        convert_lite_trace(Path(tmp_path), info)
+        Path(tmp_path).rename(local_path)
+        return True
+    except Exception:
+        Path(tmp_path).unlink(missing_ok=True)
+        return False
+
+
+def convert_lite_trace(path: Path, meta: dict):
+    """Convert an ARE lite trace JSON to viewer detail format in-place."""
+    trace = json.loads(path.read_text())
+
+    # Extract conversation
+    conversation = []
+    task_prompt = ""
+    histories = trace.get("per_agent_interaction_histories", {})
+    for agent_id, messages in histories.items():
+        for msg in messages:
+            role = msg.get("role", "")
+            content = msg.get("content", "")
+            conversation.append({"role": role, "content": content})
+            if role == "user" and not task_prompt:
+                task_prompt = content
+        break
+
+    # Extract token usage
+    prompt_tokens = 0
+    completion_tokens = 0
+    usage = trace.get("per_agent_llm_usage_stats", {})
+    for agent_id, stats in usage.items():
+        if isinstance(stats, dict):
+            prompt_tokens = stats.get("prompt_tokens", 0)
+            completion_tokens = stats.get("completion_tokens", 0)
+        break
+
+    detail = {
+        "scenario_id": meta.get("scenario_id", trace.get("scenario_id", "")),
+        "category": meta.get("category", ""),
+        "task_prompt": task_prompt,
+        "expected_answer": "",
+        "model_answer": "",
+        "oracle_events": [],
+        "validation_decision": trace.get("validation_decision", "Valid" if meta.get("is_pass") else "Invalid"),
+        "validation_rationale": trace.get("validation_rationale", meta.get("rationale", "")),
+        "per_tool": [],
+        "conversation": conversation,
+        "metrics": {
+            "tool_score": meta.get("score", 0),
+            "total_tokens": prompt_tokens + completion_tokens,
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "duration_s": trace.get("run_duration", 0),
+            "tool_efficiency": 0,
+            "failure_type": "success" if meta.get("is_pass") else "failed",
+        },
+    }
+
+    path.write_text(json.dumps(detail, indent=2))
+
+
+# ---------------------------------------------------------------------------
+# Index generation
+# ---------------------------------------------------------------------------
+
+def generate_index():
+    """Generate index.json from all synced runs."""
+    runs_dir = VIEWER_DATA / "runs"
     if not runs_dir.exists():
-        runs_dir.mkdir(parents=True, exist_ok=True)
-
-    # Build a lookup from run_id to discovery metadata
-    meta_by_run = {}
-    for d in discovered:
-        meta_by_run[d["run_id"]] = d
+        return
 
     index_runs = []
     for run_dir in sorted(runs_dir.iterdir()):
         summary_file = run_dir / "summary.json"
         if not summary_file.exists():
             continue
-
         try:
-            summary = json.loads(summary_file.read_text())
+            s = json.loads(summary_file.read_text())
         except (json.JSONDecodeError, OSError):
             continue
 
-        run_id = summary.get("run_id", run_dir.name)
-        meta = meta_by_run.get(run_id, {})
-        aggregates = summary.get("aggregates", {})
-        overall = aggregates.get("overall", {})
-
+        overall = s.get("aggregates", {}).get("overall", {})
         index_runs.append({
-            "run_id": run_id,
-            "model_name": summary.get("model_name", run_id),
-            "timestamp": summary.get("timestamp", ""),
-            "training_step": summary.get("training_step"),
-            "n_scenarios": overall.get("n", len(summary.get("scenarios", []))),
-            "overall_pass_rate": overall.get("pass_rate", 0.0),
-            "overall_avg_tool_score": overall.get("avg_tool_score", 0.0),
-            "box": meta.get("host", "local"),
-            "wandb_url": meta.get("wandb_url"),
-            "status": "active" if meta.get("is_active") else "complete",
+            "run_id": s.get("run_id", run_dir.name),
+            "model_name": s.get("model_name", run_dir.name),
+            "timestamp": s.get("timestamp", ""),
+            "training_step": s.get("training_step"),
+            "n_scenarios": overall.get("n", len(s.get("scenarios", []))),
+            "overall_pass_rate": overall.get("pass_rate", 0),
+            "overall_avg_tool_score": overall.get("avg_tool_score", 0),
         })
 
-    index_runs.sort(key=lambda r: r.get("timestamp", ""), reverse=True)
-
-    index_path = VIEWER_DATA_DIR / "index.json"
+    index_runs.sort(key=lambda r: r.get("model_name", ""))
+    index_path = VIEWER_DATA / "index.json"
     index_path.parent.mkdir(parents=True, exist_ok=True)
     index_path.write_text(json.dumps({"runs": index_runs}, indent=2))
-    print(f"Generated index with {len(index_runs)} runs at {index_path}")
+    print(f"  Index: {len(index_runs)} runs")
 
 
-class ViewerHandler(SimpleHTTPRequestHandler):
-    """HTTP handler that serves viewer files and on-demand detail fetching."""
-
-    def __init__(self, *args, config=None, discovered=None, **kwargs):
-        self._config = config or {}
-        self._discovered = discovered or []
-        super().__init__(*args, **kwargs)
-
-    def do_GET(self):
-        # Handle /api/detail/<run_id>/<scenario_id>
-        if self.path.startswith("/api/detail/"):
-            parts = self.path.split("/")
-            # /api/detail/<run_id>/<scenario_id>
-            if len(parts) >= 5:
-                run_id = parts[3]
-                scenario_id = parts[4].split("?")[0]  # strip query params
-                self._serve_detail(run_id, scenario_id)
-                return
-
-        # Serve static files from viewer directory
-        super().do_GET()
-
-    def _serve_detail(self, run_id: str, scenario_id: str):
-        local_path = VIEWER_DATA_DIR / "runs" / run_id / "details" / f"{scenario_id}.json"
-
-        # If not cached locally, fetch on demand
-        if not local_path.exists():
-            host = self._find_host(run_id)
-            if host:
-                # Look for detail on remote
-                remote_detail = None
-                for d in self._discovered:
-                    if d["run_id"] == run_id:
-                        remote_run_dir = str(Path(d["remote_summary"]).parent)
-                        remote_detail = f"{remote_run_dir}/details/{scenario_id}.json"
-                        break
-
-                if remote_detail:
-                    print(f"  On-demand fetch: {run_id}/{scenario_id} from {host}")
-                    scp_file(host, remote_detail, str(local_path))
-
-        if local_path.exists():
-            data = local_path.read_bytes()
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(data)))
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.end_headers()
-            self.wfile.write(data)
-        else:
-            self.send_response(404)
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
-            self.wfile.write(json.dumps({"error": "detail not found"}).encode())
-
-    def _find_host(self, run_id: str) -> str | None:
-        for d in self._discovered:
-            if d["run_id"] == run_id:
-                return d["host"]
-        return None
-
-    def log_message(self, format, *args):
-        # Quieter logging
-        if "/api/" in (args[0] if args else ""):
-            super().log_message(format, *args)
-
-
-def serve(config: dict, discovered: list[dict], open_browser: bool = False):
-    """Start local HTTP server."""
-    port = config.get("viewer_port", 9000)
-
-    # Change to viewer directory so static files are served correctly
-    os.chdir(VIEWER_DIR)
-
-    handler = partial(ViewerHandler, config=config, discovered=discovered)
-    server = ThreadingHTTPServer(("0.0.0.0", port), handler)
-
-    url = f"http://localhost:{port}"
-    print(f"Serving viewer at {url}")
-    print("Press Ctrl+C to stop")
-
-    if open_browser:
-        threading.Timer(1.0, lambda: webbrowser.open(url)).start()
-
-    try:
-        server.serve_forever()
-    except KeyboardInterrupt:
-        print("\nShutting down.")
-        server.shutdown()
-
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
 
 def main():
     parser = argparse.ArgumentParser(description="Sync and serve GAIA2 viewer data")
-    parser.add_argument(
-        "--config",
-        type=str,
-        default=str(SCRIPT_DIR / "viewer_config.yaml"),
-        help="Path to viewer config YAML",
-    )
-    parser.add_argument(
-        "--serve",
-        action="store_true",
-        help="Start local HTTP server and open browser",
-    )
-    parser.add_argument(
-        "--sync-only",
-        action="store_true",
-        help="Only sync data, don't start server",
-    )
+    parser.add_argument("--config", default=str(SCRIPT_DIR / "viewer_config.yaml"))
+    parser.add_argument("--serve", action="store_true", help="Start Next.js dev server after sync")
+    parser.add_argument("--full", action="store_true", help="Also pull all detail files (slow)")
+    parser.add_argument("--fetch-detail", nargs=2, metavar=("RUN_ID", "SCENARIO_ID"),
+                        help="Lazily fetch a single detail file (used by Next.js API route)")
     args = parser.parse_args()
+
+    # Single detail fetch mode (called by Next.js API route)
+    if args.fetch_detail:
+        run_id, scenario_id = args.fetch_detail
+        ok = fetch_single_detail(run_id, scenario_id)
+        sys.exit(0 if ok else 1)
 
     config = load_config(args.config)
 
-    # Discovery and sync
-    print("=== Discovery ===")
-    discovered = discover_runs(config)
+    # Discover
+    print("Discovering runs on GPU boxes...")
+    runs = discover_are_runs(config)
 
-    print("\n=== Sync ===")
-    synced = sync_runs(discovered)
+    if not runs:
+        print("No runs found on any boxes.")
+    else:
+        # Sync each run
+        print(f"\nSyncing {len(runs)} run(s)...")
+        for run in runs:
+            run_id = slugify(run["model_name"]) + "-baseline"
+            convert_run(
+                host=run["host"],
+                remote_dir=run["remote_dir"],
+                model_name=run["model_name"],
+                categories=run["categories"],
+                run_id=run_id,
+                fetch_details=args.full,
+            )
 
-    print("\n=== Index ===")
-    generate_index(discovered)
-
-    if args.sync_only:
-        return
+    # Generate index
+    print("\nUpdating index...")
+    generate_index()
 
     if args.serve:
-        print("\n=== Server ===")
-        serve(config, discovered, open_browser=True)
+        port = config.get("viewer_port", 9000)
+        print(f"\nStarting viewer at http://localhost:{port}")
+        os.chdir(REPO_ROOT / "viewer")
+        os.execlp("npx", "npx", "next", "dev", "-p", str(port))
     else:
-        print("\nDone. Use --serve to start the local viewer server.")
+        print("\nDone. Run with --serve to start the viewer, or: cd viewer && npx next dev -p 9000")
 
 
 if __name__ == "__main__":

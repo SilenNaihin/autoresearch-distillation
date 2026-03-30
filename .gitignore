@@ -9,4 +9,5 @@ wandb/
 viewer/data/
 viewer/.next/
 viewer/node_modules/
-viewer/public/data/
+viewer/public/data/runs/
+viewer/public/data/index.json

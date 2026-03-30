@@ -12,63 +12,69 @@ A local web app for browsing GAIA2 benchmark scenarios and comparing model evalu
 ## Quick start
 
 ```bash
-# 1. Install dependencies (one time)
+# 1. Install viewer dependencies (one time)
 cd viewer && npm install
 
-# 2. Download benchmark data from HuggingFace (one time)
-export HF_TOKEN=hf_xxx
-python scripts/sync_benchmark.py
-
-# 3. Start the viewer
-cd viewer && npx next dev -p 9000
+# 2. Sync model results from GPU boxes and start the viewer
+python scripts/viewer_sync.py --serve
 # Opens at http://localhost:9000
 ```
 
-The benchmark browser works immediately. To see model run results, sync from your dev boxes:
+That's it. The benchmark data (800 scenarios) is already committed in the repo. The sync script SSHs into the GPU boxes, discovers ARE baseline runs, converts them to viewer format, and starts Next.js.
 
-```bash
-# Pull results from all GPU boxes and start the viewer
-python scripts/viewer_sync.py --serve
-```
+Conversation traces for individual scenarios are fetched lazily -- they load over SSH when you click into a scenario detail page.
 
 ## How it works
 
 ```
-   GPU boxes (h100-dev-box-1, 3, 4)          Your Mac
+   GPU boxes (h100-dev-box-3, 4)              Your Mac
    ┌─────────────────────────────┐          ┌──────────────────────┐
-   │ ARE scaffold runs eval      │          │                      │
-   │ Writes traces to            │   SSH    │  viewer_sync.py      │
-   │ /data/viewer_data/runs/     │ -------> │  discovers + pulls   │
-   │                             │   scp    │  summary.json files  │
-   └─────────────────────────────┘          │                      │
+   │ ARE benchmark writes:       │          │                      │
+   │   output.jsonl (scores)     │   SSH    │  viewer_sync.py      │
+   │   lite/*.json (traces)      │ -------> │  discovers runs      │
+   │   benchmark_stats.json      │   scp    │  pulls scores        │
+   └─────────────────────────────┘          │  generates summaries │
+                                            │                      │
                                             │  Next.js viewer      │
-   HuggingFace                              │  serves on :9000     │
-   ┌─────────────────────────────┐          │                      │
-   │ meta-agents-research-       │  HTTPS   │  sync_benchmark.py   │
-   │ environments/gaia2          │ -------> │  downloads 800       │
-   │ (800 scenarios, 5 cats)     │          │  scenarios to JSON   │
-   └─────────────────────────────┘          └──────────────────────┘
+                                            │  serves on :9000     │
+                                            │                      │
+                                            │  Detail files pulled │
+                                            │  lazily on click     │
+                                            └──────────────────────┘
 ```
 
-**Benchmark data** is downloaded once from HuggingFace and saved as a static JSON file. This powers the Benchmark tab — no runs needed.
+**Benchmark data** (800 GAIA2 scenarios) is committed at `viewer/public/data/benchmark.json`. To refresh it from HuggingFace: `HF_TOKEN=hf_xxx python scripts/sync_benchmark.py`
 
-**Model run data** lives on GPU boxes. `viewer_sync.py` SSHs into each box listed in `scripts/viewer_config.yaml`, finds completed eval runs, and copies the lightweight summary files (~5KB per run) locally. Detail files (full conversations, ~50KB each) are fetched lazily — only when you click into a specific scenario.
+**Model run data** lives on GPU boxes. `viewer_sync.py` SSHs into each box listed in `scripts/viewer_config.yaml`, finds ARE benchmark output directories, reads the lightweight `output.jsonl` files (scores + pass/fail), and generates viewer-format summaries locally. No manual conversion needed.
 
-**During training**, the scaffold auto-exports viewer data after each eval checkpoint. When you sync, new training steps appear in the Training tab as additional data points.
+**Detail files** (full conversation traces, ~50KB each) are fetched lazily over SSH when you click into a specific scenario. They're cached locally after the first fetch.
+
+**Full sync**: Use `--full` to pull all detail files upfront (slow but good for offline use): `python scripts/viewer_sync.py --full --serve`
+
+## Adding new boxes
+
+Edit `scripts/viewer_config.yaml`:
+
+```yaml
+boxes:
+  - ssh_host: h100-dev-box-4
+    data_paths: [/data/gaia2_baselines]
+```
 
 ## Project structure
 
 ```
 scripts/
-  sync_benchmark.py      # HuggingFace -> viewer/public/data/benchmark.json
-  viewer_sync.py          # SSH to GPU boxes -> viewer/public/data/runs/
+  viewer_sync.py          # Discover + sync + serve (the main entry point)
   viewer_config.yaml      # Which boxes to sync from
-  trace_metrics.py        # Shared metric computation (tool score, failure classification)
-  export_viewer_data.py   # ARE traces -> viewer JSON (runs on GPU boxes)
+  sync_benchmark.py       # HuggingFace -> viewer/public/data/benchmark.json
 
 viewer/
   src/app/                # Next.js pages (dashboard, benchmark, scenarios, compare, training)
   src/components/         # Shared components (nav, ui primitives, conversation renderer)
-  src/lib/                # Types and data fetching utilities
-  public/data/            # .gitignored — synced data lives here
+  src/lib/                # Types and data fetching
+  public/data/
+    benchmark.json        # Committed: 800 GAIA2 scenarios
+    runs/                 # Gitignored: synced model run data
+    index.json            # Gitignored: run manifest
 ```
