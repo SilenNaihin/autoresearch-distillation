@@ -12,14 +12,16 @@ A local web app for browsing GAIA2 benchmark scenarios and comparing model evalu
 ## Quick start
 
 ```bash
-# 1. One-time setup
-pip install pyyaml wandb
-wandb login                     # paste your API key from wandb.ai/authorize
-cd viewer && npm install && cd ..
+bash scripts/setup_viewer.sh
+# Installs deps, logs into wandb if needed, syncs data, opens http://localhost:9000
+```
 
-# 2. Sync + serve
+Or manually:
+
+```bash
+pip install pyyaml wandb && wandb login
+cd viewer && npm install && cd ..
 python scripts/viewer_sync.py --serve
-# Opens at http://localhost:9000
 ```
 
 That's it. The benchmark data (800 scenarios) is already committed in the repo. The sync script pulls eval results from GPU boxes over SSH, fetches training runs from wandb, and starts Next.js.
