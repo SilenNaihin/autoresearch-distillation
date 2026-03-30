@@ -658,6 +658,8 @@ def main():
     parser.add_argument("--full", action="store_true", help="Also pull all detail files (slow)")
     parser.add_argument("--fetch-detail", nargs=2, metavar=("RUN_ID", "SCENARIO_ID"),
                         help="Lazily fetch a single detail file (used by Next.js API route)")
+    parser.add_argument("--training-only", action="store_true",
+                        help="Only refresh training runs (fast, used by Next.js API route)")
     args = parser.parse_args()
 
     # Single detail fetch mode (called by Next.js API route)
@@ -667,6 +669,20 @@ def main():
         sys.exit(0 if ok else 1)
 
     config = load_config(args.config)
+
+    # Training-only mode: just refresh wandb data in index.json
+    if args.training_only:
+        training_runs = discover_training_runs(config)
+        # Update only training_runs in existing index
+        index_path = VIEWER_DATA / "index.json"
+        if index_path.exists():
+            idx = json.loads(index_path.read_text())
+        else:
+            idx = {"runs": []}
+        idx["training_runs"] = training_runs
+        index_path.parent.mkdir(parents=True, exist_ok=True)
+        index_path.write_text(json.dumps(idx, indent=2))
+        sys.exit(0)
 
     # Discover eval runs
     print("Discovering eval runs on GPU boxes...")

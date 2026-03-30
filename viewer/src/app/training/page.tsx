@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useState, useMemo } from "react";
-import { fetchIndex, fetchSummary, formatPercent } from "@/lib/data";
-import type { RunIndex, RunSummary, TrainingRun } from "@/lib/types";
+import { fetchIndex, fetchSummary } from "@/lib/data";
+import type { RunSummary, TrainingRun } from "@/lib/types";
 import { Card, Badge, Spinner, EmptyState } from "@/components/ui";
 import {
   LineChart,
@@ -23,25 +23,31 @@ const tooltipStyle = {
 };
 
 export default function TrainingPage() {
-  const [index, setIndex] = useState<RunIndex | null>(null);
+  const [trainingRuns, setTrainingRuns] = useState<TrainingRun[]>([]);
   const [summaries, setSummaries] = useState<RunSummary[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetchIndex().then(async (idx) => {
-      setIndex(idx);
-      const evalRuns = idx.runs.filter((r) => r.training_step != null);
-      const results = await Promise.all(
-        evalRuns.map((r) => fetchSummary(r.run_id))
+    // Fetch training runs live from wandb API route
+    Promise.all([
+      fetch("/api/training").then((r) => r.ok ? r.json() : []),
+      fetchIndex().then(async (idx) => {
+        const evalRuns = idx.runs.filter((r) => r.training_step != null);
+        const results = await Promise.all(
+          evalRuns.map((r) => fetchSummary(r.run_id))
+        );
+        return results.filter(Boolean) as RunSummary[];
+      }),
+    ]).then(([runs, sums]) => {
+      setTrainingRuns(
+        (runs as TrainingRun[]).sort(
+          (a, b) => (b.started_at ?? "").localeCompare(a.started_at ?? "")
+        )
       );
-      setSummaries(results.filter(Boolean) as RunSummary[]);
+      setSummaries(sums);
       setLoading(false);
     });
   }, []);
-
-  const trainingRuns = [...(index?.training_runs ?? [])].sort(
-    (a, b) => (b.started_at ?? "").localeCompare(a.started_at ?? "")
-  );
 
   const chartData = useMemo(() => {
     return summaries
