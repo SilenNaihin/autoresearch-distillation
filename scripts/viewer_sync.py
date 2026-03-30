@@ -401,14 +401,117 @@ def convert_lite_trace(path: Path, meta: dict):
 
 
 # ---------------------------------------------------------------------------
+# Training run discovery
+# ---------------------------------------------------------------------------
+
+def discover_training_runs(config: dict) -> list[dict]:
+    """Find active/recent training runs by checking wandb dirs and processes."""
+    training_runs = []
+
+    for box in config.get("boxes", []):
+        host = box["ssh_host"]
+        print(f"  {host}...", end="", flush=True)
+
+        if ssh_run(host, "echo ok", timeout=5) is None:
+            print(" unreachable")
+            continue
+
+        # Find wandb URLs from claas.log (active training)
+        wandb_info = ssh_run(host, r"""
+            grep -h 'View run at' /tmp/claas.log 2>/dev/null | tail -1;
+            echo '---';
+            grep -h 'Syncing run' /tmp/claas.log 2>/dev/null | tail -1;
+            echo '---';
+            pgrep -fa 'serve.main|verl|sdpo|wake_sleep|train' 2>/dev/null | grep -v grep | head -1;
+            echo '---';
+            ls -d /data/checkpoints/*/global_step_* 2>/dev/null;
+            echo '---';
+            nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1
+        """, timeout=15)
+
+        if not wandb_info:
+            print(" no data")
+            continue
+
+        parts = wandb_info.split("---")
+        wandb_url_line = parts[0].strip() if len(parts) > 0 else ""
+        run_name_line = parts[1].strip() if len(parts) > 1 else ""
+        active_process = parts[2].strip() if len(parts) > 2 else ""
+        checkpoint_dirs = parts[3].strip() if len(parts) > 3 else ""
+        gpu_name = parts[4].strip() if len(parts) > 4 else ""
+
+        # Parse wandb URL
+        wandb_url = ""
+        if "https://" in wandb_url_line:
+            wandb_url = wandb_url_line.split("https://")[-1]
+            wandb_url = "https://" + wandb_url.strip().rstrip(")")
+
+        # Parse run name
+        run_name = ""
+        if "Syncing run" in run_name_line:
+            run_name = run_name_line.split("Syncing run")[-1].strip()
+
+        if not wandb_url and not active_process:
+            print(" no training runs")
+            continue
+
+        # Parse checkpoints — paths like /data/checkpoints/model-name/global_step_100
+        checkpoints = []
+        checkpoint_model = ""
+        if checkpoint_dirs:
+            for line in checkpoint_dirs.split("\n"):
+                line = line.strip().rstrip("/")
+                name = Path(line).name
+                if name.startswith("global_step_"):
+                    try:
+                        checkpoints.append(int(name.replace("global_step_", "")))
+                    except ValueError:
+                        pass
+                    if not checkpoint_model:
+                        checkpoint_model = Path(line).parent.name
+        checkpoints.sort()
+
+        # Determine model name from run name, checkpoint path, or fallback
+        model_name = run_name or checkpoint_model or "Unknown"
+
+        is_active = bool(active_process)
+
+        # Extract wandb project from URL
+        wandb_project = ""
+        if wandb_url:
+            # https://wandb.ai/team/project/runs/id
+            url_parts = wandb_url.rstrip("/").split("/")
+            if len(url_parts) >= 5:
+                wandb_project = url_parts[-3] if "runs" in url_parts else ""
+
+        training_runs.append({
+            "run_id": f"training-{host}-{slugify(model_name)}",
+            "run_name": run_name,
+            "model_name": model_name,
+            "box": host,
+            "wandb_url": wandb_url,
+            "wandb_project": wandb_project,
+            "started_at": "",
+            "status": "active" if is_active else "complete",
+            "checkpoints": checkpoints,
+            "gpu": gpu_name,
+        })
+
+        status = "active" if is_active else "complete"
+        print(f" {run_name} ({status}, {len(checkpoints)} checkpoints)")
+
+    return training_runs
+
+
+# ---------------------------------------------------------------------------
 # Index generation
 # ---------------------------------------------------------------------------
 
-def generate_index():
-    """Generate index.json from all synced runs."""
+def generate_index(training_runs: list[dict] | None = None):
+    """Generate index.json from all synced runs + training runs."""
     runs_dir = VIEWER_DATA / "runs"
     if not runs_dir.exists():
-        return
+        runs_dir.mkdir(parents=True, exist_ok=True)
 
     index_runs = []
     for run_dir in sorted(runs_dir.iterdir()):
@@ -432,10 +535,15 @@ def generate_index():
         })
 
     index_runs.sort(key=lambda r: r.get("model_name", ""))
+
+    index = {"runs": index_runs}
+    if training_runs:
+        index["training_runs"] = training_runs
+
     index_path = VIEWER_DATA / "index.json"
     index_path.parent.mkdir(parents=True, exist_ok=True)
-    index_path.write_text(json.dumps({"runs": index_runs}, indent=2))
-    print(f"  Index: {len(index_runs)} runs")
+    index_path.write_text(json.dumps(index, indent=2))
+    print(f"  Index: {len(index_runs)} eval runs, {len(training_runs or [])} training runs")
 
 
 # ---------------------------------------------------------------------------
@@ -459,15 +567,14 @@ def main():
 
     config = load_config(args.config)
 
-    # Discover
-    print("Discovering runs on GPU boxes...")
+    # Discover eval runs
+    print("Discovering eval runs on GPU boxes...")
     runs = discover_are_runs(config)
 
     if not runs:
-        print("No runs found on any boxes.")
+        print("  No eval runs found.")
     else:
-        # Sync each run
-        print(f"\nSyncing {len(runs)} run(s)...")
+        print(f"\nSyncing {len(runs)} eval run(s)...")
         for run in runs:
             run_id = slugify(run["model_name"]) + "-baseline"
             convert_run(
@@ -479,9 +586,13 @@ def main():
                 fetch_details=args.full,
             )
 
+    # Discover training runs
+    print("\nDiscovering training runs...")
+    training_runs = discover_training_runs(config)
+
     # Generate index
     print("\nUpdating index...")
-    generate_index()
+    generate_index(training_runs)
 
     if args.serve:
         port = config.get("viewer_port", 9000)

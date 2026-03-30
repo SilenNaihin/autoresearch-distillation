@@ -12,8 +12,23 @@ export interface RunEntry {
   status?: "active" | "complete";
 }
 
+export interface TrainingRun {
+  run_id: string;
+  run_name: string;
+  model_name: string;
+  box: string;
+  wandb_url: string;
+  wandb_project: string;
+  started_at: string;
+  status: "active" | "complete";
+  checkpoints: number[];
+  gpu: string;
+  config_summary?: string;
+}
+
 export interface RunIndex {
   runs: RunEntry[];
+  training_runs?: TrainingRun[];
 }
 
 // === Summary (per-run) ===

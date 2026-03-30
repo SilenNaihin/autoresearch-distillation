@@ -110,14 +110,18 @@ The framework was developed on [Karpathy's autoresearch](https://github.com/karp
 
 | Method | Model | Experiments | Best | Avg |
 |--------|-------|-------------|------|-----|
+| Claude Haiku single | Claude Haiku 4.5 | 50 turns (no feedback) | **1.009 (-4.4%)** | 1.070 |
 | **SDPO ckpt + ICL** | Qwen3-14B-SDPO | 50 turns (with feedback) | **1.023 (-3.1%)** | 1.071 |
+| SDPO (training) | Qwen3-14B | 7,920 rollouts (495 steps × 16) | 1.023 (-3.1%) | — |
+| Claude Opus ICL | Claude Opus 4.6 | 50 turns (with feedback) | 1.027 (-2.8%) | — |
 | Karpathy Agent | Claude? | 126 | 0.970 (-2.8%) | — |
-| SDPO (training) | Qwen3-14B | 960 rollouts (60 steps x 16) | 1.028 (-2.6%) | 1.073 |
 | SDPO ckpt + single | Qwen3-14B-SDPO | 50 turns (no feedback) | 1.028 (-2.6%) | 1.060 |
+| GRPO (training) | Qwen3-14B | 151 steps | 1.030 (-2.4%) | — |
+| Claude Opus single | Claude Opus 4.6 | 30 turns (no feedback) | 1.032 (-2.3%) | — |
 | Single-turn | Qwen3-14B | 50 turns (no feedback) | 1.032 (-2.3%) | 1.122 |
 | ICL baseline | Qwen3-14B | 50 turns (with feedback) | 1.038 (-1.7%) | 1.066 |
 
-Absolute baselines differ (Karpathy: 0.998, ours: 1.056) due to platform/setup differences. Relative improvements are compared.
+Absolute baselines differ (Karpathy: 0.998, ours: 1.056) due to platform/setup differences. Relative improvements are compared. Claude Haiku single achieves the best absolute score but with high variance (19/50 turns succeeded); SDPO ckpt + ICL offers similar best-case from a 14B open-source model. GRPO without PUCT reuse suffers entropy collapse (0.36→0.01); with PUCT it maintains exploration.
 
 ## Architecture
 

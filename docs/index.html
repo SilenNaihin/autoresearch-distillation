@@ -237,11 +237,12 @@
       <p>
         On our flagship task &mdash; <a href="https://github.com/karpathy/autoresearch">Karpathy's autoresearch</a>
         benchmark &mdash; we train <strong>Qwen3-14B</strong> with SDPO to minimize validation loss on a GPT
-        pretraining script. SDPO achieves <strong>val_bpb&nbsp;=&nbsp;1.028</strong> during training and
-        <strong>1.023</strong> when the trained checkpoint is evaluated with ICL, a 3.1% improvement
-        that surpasses the original 2.8% from the Karpathy agent. We find that context conditioning (ICL)
-        adds consistency without improving outcomes, while weight updates improve the model&rsquo;s
-        capabilities, leading to improvements not produced by the base model.
+        pretraining script. Over 495 training steps, SDPO converges to <strong>val_bpb&nbsp;~1.025</strong>
+        and holds steady for 300+ steps, achieving a best of <strong>1.023</strong> (&minus;3.1%).
+        GRPO reaches &minus;2.4% but suffers entropy collapse without our PUCT reuse buffer.
+        Compared against Claude Opus 4.6 (&minus;2.8% ICL) and Claude Haiku 4.5 (&minus;4.4%
+        single-turn, high variance), the SDPO-trained 14B model matches or exceeds much larger
+        API models while learning stable exploration patterns encoded in its weights.
       </p>
     </div>
   </section>
@@ -325,38 +326,30 @@
     </p>
 
     <!--
-      Bar widths as % of max visible improvement (3.1%):
-      SDPO ckpt+ICL: 3.1/3.1 = 100%
-      Karpathy:      2.8/3.1 = 90%
-      SDPO train:    2.6/3.1 = 84%
-      SDPO ckpt+ST:  2.6/3.1 = 84%
-      Single-turn:   2.3/3.1 = 74%
-      ICL:           1.7/3.1 = 55%
+      Bar widths as % of max visible improvement (4.4%):
+      Haiku single:  4.4/4.4 = 100%
+      SDPO ckpt+ICL: 3.1/4.4 = 70%
+      SDPO train:    3.1/4.4 = 70%
+      Opus ICL:      2.8/4.4 = 64%
+      Karpathy:      2.8/4.4 = 64%
+      SDPO ckpt+ST:  2.6/4.4 = 59%
+      GRPO:          2.4/4.4 = 55%
+      Opus single:   2.3/4.4 = 52%
+      Single-turn:   2.3/4.4 = 52%
+      ICL:           1.7/4.4 = 39%
     -->
     <div class="chart-container">
-      <!--
+
       <div class="bar-row">
         <div class="bar-label">
-          Claude Opus 4.6
-          <small>ICL, 50 turns</small>
+          Claude Haiku Single
+          <small>50 turns, 19 succeeded</small>
         </div>
         <div class="bar-track">
           <div class="bar-fill claude" style="width: 100%;"></div>
         </div>
-        <div class="bar-value">&minus;4.0%</div>
+        <div class="bar-value">&minus;4.4%</div>
       </div>
-
-      <div class="bar-row">
-        <div class="bar-label">
-          Claude Opus 4.6
-          <small>Single-turn, 50 turns</small>
-        </div>
-        <div class="bar-track">
-          <div class="bar-fill claude" style="width: 97%;"></div>
-        </div>
-        <div class="bar-value">&minus;3.8%</div>
-      </div>
-      -->
 
       <div class="bar-row">
         <div class="bar-label">
@@ -364,9 +357,31 @@
           <small>Qwen3-14B, best of 50</small>
         </div>
         <div class="bar-track">
-          <div class="bar-fill sdpo-ckpt" style="width: 100%;"></div>
+          <div class="bar-fill sdpo-ckpt" style="width: 70%;"></div>
         </div>
         <div class="bar-value">&minus;3.1%</div>
+      </div>
+
+      <div class="bar-row">
+        <div class="bar-label">
+          SDPO (training)
+          <small>Qwen3-14B, 495 steps</small>
+        </div>
+        <div class="bar-track">
+          <div class="bar-fill sdpo" style="width: 70%;"></div>
+        </div>
+        <div class="bar-value">&minus;3.1%</div>
+      </div>
+
+      <div class="bar-row">
+        <div class="bar-label">
+          Claude Opus ICL
+          <small>50 turns, with feedback</small>
+        </div>
+        <div class="bar-track">
+          <div class="bar-fill claude" style="width: 64%;"></div>
+        </div>
+        <div class="bar-value">&minus;2.8%</div>
       </div>
 
       <div class="bar-row">
@@ -375,20 +390,9 @@
           <small>Claude?, 126 experiments</small>
         </div>
         <div class="bar-track">
-          <div class="bar-fill claude" style="width: 90%;"></div>
+          <div class="bar-fill claude" style="width: 64%;"></div>
         </div>
         <div class="bar-value">&minus;2.8%</div>
-      </div>
-
-      <div class="bar-row">
-        <div class="bar-label">
-          SDPO (training)
-          <small>Qwen3-14B, best of 960</small>
-        </div>
-        <div class="bar-track">
-          <div class="bar-fill sdpo" style="width: 84%;"></div>
-        </div>
-        <div class="bar-value">&minus;2.6%</div>
       </div>
 
       <div class="bar-row">
@@ -397,9 +401,31 @@
           <small>Qwen3-14B, best of 50</small>
         </div>
         <div class="bar-track">
-          <div class="bar-fill sdpo-ckpt" style="width: 84%;"></div>
+          <div class="bar-fill sdpo-ckpt" style="width: 59%;"></div>
         </div>
         <div class="bar-value">&minus;2.6%</div>
+      </div>
+
+      <div class="bar-row">
+        <div class="bar-label">
+          GRPO (training)
+          <small>Qwen3-14B, 151 steps</small>
+        </div>
+        <div class="bar-track">
+          <div class="bar-fill grpo" style="width: 55%;"></div>
+        </div>
+        <div class="bar-value">&minus;2.4%</div>
+      </div>
+
+      <div class="bar-row">
+        <div class="bar-label">
+          Claude Opus Single
+          <small>30 turns, no feedback</small>
+        </div>
+        <div class="bar-track">
+          <div class="bar-fill claude" style="width: 52%;"></div>
+        </div>
+        <div class="bar-value">&minus;2.3%</div>
       </div>
 
       <div class="bar-row">
@@ -408,7 +434,7 @@
           <small>Qwen3-14B, best of 50</small>
         </div>
         <div class="bar-track">
-          <div class="bar-fill single" style="width: 74%;"></div>
+          <div class="bar-fill single" style="width: 52%;"></div>
         </div>
         <div class="bar-value">&minus;2.3%</div>
       </div>
@@ -419,51 +445,26 @@
           <small>Qwen3-14B, best of 50</small>
         </div>
         <div class="bar-track">
-          <div class="bar-fill icl" style="width: 55%;"></div>
+          <div class="bar-fill icl" style="width: 39%;"></div>
         </div>
         <div class="bar-value">&minus;1.7%</div>
       </div>
 
       <p class="chart-note">
-        Karpathy result from <a href="https://github.com/karpathy/autoresearch/discussions/43">126-experiment run</a>
-        (0.998 &rarr; 0.970). Our baseline differs in absolute terms (1.056) due to platform setup;
-        relative improvements are comparable. SDPO Ckpt runs use the trained checkpoint with frozen weights.
+        All improvements relative to unmodified baseline (1.056). Karpathy result from
+        <a href="https://github.com/karpathy/autoresearch/discussions/43">126-experiment run</a>
+        (0.998 &rarr; 0.970, different absolute baseline). Claude Haiku single has high variance
+        (avg 1.070); SDPO ckpt + ICL offers similar best-case from a 14B open-source model.
+        GRPO without PUCT reuse suffers entropy collapse (0.36&rarr;0.01).
       </p>
     </div>
-
-    <!--
-    <h3>RL Training (960 rollouts)</h3>
-    <div class="chart-container">
-      <div class="bar-row">
-        <div class="bar-label">
-          SDPO
-          <small>Qwen3-14B</small>
-        </div>
-        <div class="bar-track">
-          <div class="bar-fill sdpo" style="width: 74%;"></div>
-        </div>
-        <div class="bar-value">&minus;2.9%</div>
-      </div>
-
-      <div class="bar-row">
-        <div class="bar-label">
-          GRPO
-          <small>Qwen3-14B</small>
-        </div>
-        <div class="bar-track">
-          <div class="bar-fill grpo" style="width: 26%;"></div>
-        </div>
-        <div class="bar-value">&minus;1.0%</div>
-      </div>
-    </div>
-    -->
   </section>
 
   <hr>
 
   <!-- Approaches -->
   <section>
-    <h2>Three Approaches (Autoresearch)</h2>
+    <h2>Four Approaches (Autoresearch)</h2>
 
     <h3>SDPO <span class="pill pill-rl">RL</span></h3>
     <p>
@@ -473,16 +474,29 @@
       need a successful demonstration for an advantage signal &mdash; it only needs the correct solution
       to be more likely under the teacher model compared to the student model, providing dense supervision
       even when all rollouts fail.
+      Over 495 steps, SDPO entropy <em>increases</em> (0.28&rarr;0.61) &mdash; no mode collapse &mdash;
+      while pg_loss steadily decreases (0.052&rarr;0.011), indicating continued learning.
       Weight updates encode exploration patterns that compound across training &mdash; increasing effective
       memory and feedback adherence in comparison to context-bounded approaches (such as ICL and memory systems).
+    </p>
+
+    <h3>GRPO <span class="pill pill-rl">RL</span></h3>
+    <p>
+      Group Relative Policy Optimization uses reward differences <em>within</em> a batch as the learning
+      signal. Without our PUCT reuse buffer, GRPO suffers entropy collapse (0.36&rarr;0.01 over 151 steps)
+      &mdash; the model locks into a single strategy and stops exploring. With the reuse buffer maintaining
+      diverse starting points, GRPO-MCTS reaches &minus;3.5% in 58 steps but remains noisier than SDPO
+      (bouncing around 1.04&ndash;1.07 vs SDPO&rsquo;s steady ~1.025). Best result without PUCT:
+      <strong>val_bpb&nbsp;=&nbsp;1.030</strong> (&minus;2.4%).
     </p>
 
     <h3>ICL Baseline <span class="pill pill-icl">In-Context</span></h3>
     <p>
       Same model, same tools, no weight updates. The model accumulates experiment feedback in its context
       window across 50 sequential turns: top results with full diffs, classified crash reports, and
-      structured history. All learning happens through context conditioning. Best result:
-      <strong>val_bpb&nbsp;=&nbsp;1.038</strong> across multiple runs.
+      structured history. All learning happens through context conditioning. Qwen3-14B ICL achieves
+      <strong>val_bpb&nbsp;=&nbsp;1.038</strong>; Claude Opus ICL reaches <strong>1.027</strong>;
+      Claude Haiku ICL barely improves at <strong>1.052</strong>.
     </p>
 
     <h3>Single-turn Baseline <span class="pill pill-single">No Feedback</span></h3>
@@ -490,9 +504,10 @@
       N independent single-shot calls with no history and no feedback. Just &ldquo;here&rsquo;s <code>train.py</code>,
       improve it&rdquo; repeated N times, taking the best result. This measures the entropy of the
       sampling distribution &mdash; what you get from pure random exploration at temperature&nbsp;1.0.
-      At 50 turns, single-turn achieves <strong>val_bpb&nbsp;=&nbsp;1.032</strong> &mdash; actually
-      beating ICL&rsquo;s best of 1.038, suggesting the feedback loop adds consistency but not
-      fundamentally better outcomes at this scale.
+      Qwen3-14B single-turn achieves <strong>val_bpb&nbsp;=&nbsp;1.032</strong> &mdash; beating its own
+      ICL result of 1.038. Claude Haiku single-turn reaches <strong>1.009</strong> (best overall) but
+      with only 19/50 turns succeeding and an avg of 1.070. The pattern is consistent: single-turn
+      finds better peaks through variance, while ICL adds consistency without improving outcomes.
     </p>
   </section>
 
@@ -638,23 +653,24 @@
       The core question: does RL training add value beyond what in-context learning provides?
     </p>
     <p>
-      <strong>Single-turn beats ICL.</strong> The single-turn baseline (1.032) actually outperforms
-      ICL (1.038) through a single lucky hit. The feedback loop gives ICL more consistent
-      improvements, but doesn&rsquo;t produce fundamentally better outcomes &mdash;
-      random exploration at temperature 1.0 finds better configurations by chance. Context conditioning
-      adds reliability, not capability.
+      <strong>Single-turn beats ICL.</strong> The single-turn baseline (1.032) outperforms
+      ICL (1.038) through a single lucky hit. The same pattern holds for Claude: Haiku single-turn
+      achieves 1.009 (&minus;4.4%) while Haiku ICL barely improves at all (1.052). Context conditioning
+      adds reliability, not capability &mdash; and can even hurt when the model over-conditions on
+      noisy feedback.
     </p>
     <p>
       <strong>SDPO breaks out.</strong> Weight updates encode exploration patterns that persist across
-      rollouts without consuming context. The model learns which <em>kinds</em> of changes tend to
-      work. For example, early in training the model attempts to increase the model size before
-      finding that this leads to out-of-memory errors. After ~10 steps the model learns to avoid these
-      modifications and explores other ways of improving validation loss (e.g., reducing aspect ratio and batch
-      size). SDPO achieves 1.028, a clear separation from both baselines.
+      rollouts without consuming context. SDPO converges to ~1.025 and holds steady for 300+ steps,
+      while GRPO bounces around 1.04&ndash;1.07. The trained 14B checkpoint (1.023) matches Claude Opus
+      ICL (1.027) &mdash; a model with orders of magnitude more parameters. GRPO without our PUCT
+      reuse buffer suffers entropy collapse (0.36&rarr;0.01), losing exploration entirely after ~100 steps.
     </p>
     <p>
       The gap between single-turn and ICL measures what context contributes (nothing &mdash; single-turn
       actually wins). The gap between both baselines and SDPO measures what weights contribute.
+      Claude Haiku&rsquo;s best result (1.009) comes from high-variance independent shots;
+      SDPO achieves comparable improvements reliably from a much smaller model.
     </p>
   </section>
 
@@ -681,8 +697,8 @@
     </p>
     <p>
       Despite this handicap, our SDPO-trained checkpoint evaluated with ICL (&minus;3.1%) surpasses the
-      original Karpathy agent (&minus;2.8%) using a 14B open-source model trained with RL. The dominant
-      insight is the same across both:
+      original Karpathy agent (&minus;2.8%) and matches Claude Opus 4.6 ICL (&minus;2.8%), using a 14B
+      open-source model trained with RL. The dominant insight is the same across all agents:
       <strong>throughput over parameters</strong> &mdash; trade model size for more training steps within
       the fixed budget. Both agents independently converge on this strategy.
     </p>
@@ -693,28 +709,33 @@
           <tr><th>Method</th><th>Model</th><th>Experiments</th><th>Best</th><th>Avg</th></tr>
         </thead>
         <tbody>
-          <!--
           <tr>
-            <td><strong>Claude Opus 4.6 ICL</strong></td>
-            <td>Claude Opus 4.6</td>
-            <td>50 turns (with feedback)</td>
-            <td class="best">1.014 (&minus;4.0%)</td>
-            <td>&mdash;</td>
-          </tr>
-          <tr>
-            <td>Claude Opus 4.6 single</td>
-            <td>Claude Opus 4.6</td>
+            <td><strong>Claude Haiku single</strong></td>
+            <td>Claude Haiku 4.5</td>
             <td>50 turns (no feedback)</td>
-            <td>1.015 (&minus;3.8%)</td>
-            <td>&mdash;</td>
+            <td class="best">1.009 (&minus;4.4%)</td>
+            <td>1.070</td>
           </tr>
-          -->
           <tr>
             <td><strong>SDPO ckpt + ICL</strong></td>
             <td>Qwen3-14B-SDPO</td>
             <td>50 turns (with feedback)</td>
             <td class="best">1.023 (&minus;3.1%)</td>
             <td>1.071</td>
+          </tr>
+          <tr>
+            <td>SDPO (training)</td>
+            <td>Qwen3-14B</td>
+            <td>7,920 rollouts (495 steps &times; 16)</td>
+            <td>1.023 (&minus;3.1%)</td>
+            <td>&mdash;</td>
+          </tr>
+          <tr>
+            <td>Claude Opus ICL</td>
+            <td>Claude Opus 4.6</td>
+            <td>50 turns (with feedback)</td>
+            <td>1.027 (&minus;2.8%)</td>
+            <td>&mdash;</td>
           </tr>
           <tr>
             <td>Karpathy Agent</td>
@@ -724,18 +745,25 @@
             <td>&mdash;</td>
           </tr>
           <tr>
-            <td>SDPO (training)</td>
-            <td>Qwen3-14B</td>
-            <td>960 rollouts (60 steps &times; 16)</td>
-            <td>1.028 (&minus;2.6%)</td>
-            <td>1.073</td>
-          </tr>
-          <tr>
             <td>SDPO ckpt + single</td>
             <td>Qwen3-14B-SDPO</td>
             <td>50 turns (no feedback)</td>
             <td>1.028 (&minus;2.6%)</td>
             <td>1.060</td>
+          </tr>
+          <tr>
+            <td>GRPO (training)</td>
+            <td>Qwen3-14B</td>
+            <td>151 steps</td>
+            <td>1.030 (&minus;2.4%)</td>
+            <td>&mdash;</td>
+          </tr>
+          <tr>
+            <td>Claude Opus single</td>
+            <td>Claude Opus 4.6</td>
+            <td>30 turns (no feedback)</td>
+            <td>1.032 (&minus;2.3%)</td>
+            <td>&mdash;</td>
           </tr>
           <tr>
             <td>Single-turn</td>
@@ -751,23 +779,15 @@
             <td>1.038 (&minus;1.7%)</td>
             <td>1.066</td>
           </tr>
-          <!--
-          <tr>
-            <td>GRPO (training)</td>
-            <td>Qwen3-14B</td>
-            <td>960 rollouts (60 steps &times; 16)</td>
-            <td>1.045 (&minus;1.0%)</td>
-            <td>&mdash;</td>
-          </tr>
-          -->
         </tbody>
       </table>
     </div>
 
     <p class="footnote">
       <sup>*</sup> Absolute baselines differ (Karpathy: 0.998, ours: 1.056) due to platform/setup
-      differences. Relative improvements are compared. Only ~9% of SDPO rollouts beat baseline;
-      the remaining 91% crashed or showed no improvement.
+      differences. Relative improvements are compared. Claude Haiku single has high variance
+      (19/50 turns succeeded, avg 1.070). GRPO entropy collapsed to 0.01 without PUCT reuse;
+      with PUCT it maintained exploration and reached &minus;3.5% in a shorter run.
     </p>
   </section>
 

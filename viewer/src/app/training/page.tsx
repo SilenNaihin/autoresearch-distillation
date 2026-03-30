@@ -2,8 +2,8 @@
 
 import { useEffect, useState, useMemo } from "react";
 import { fetchIndex, fetchSummary, formatPercent } from "@/lib/data";
-import type { RunIndex, RunSummary } from "@/lib/types";
-import { Card, Spinner, EmptyState } from "@/components/ui";
+import type { RunIndex, RunSummary, TrainingRun } from "@/lib/types";
+import { Card, Badge, Spinner, EmptyState } from "@/components/ui";
 import {
   LineChart,
   Line,
@@ -30,14 +30,16 @@ export default function TrainingPage() {
   useEffect(() => {
     fetchIndex().then(async (idx) => {
       setIndex(idx);
-      const trainingRuns = idx.runs.filter((r) => r.training_step != null);
+      const evalRuns = idx.runs.filter((r) => r.training_step != null);
       const results = await Promise.all(
-        trainingRuns.map((r) => fetchSummary(r.run_id))
+        evalRuns.map((r) => fetchSummary(r.run_id))
       );
       setSummaries(results.filter(Boolean) as RunSummary[]);
       setLoading(false);
     });
   }, []);
+
+  const trainingRuns = index?.training_runs ?? [];
 
   const chartData = useMemo(() => {
     return summaries
@@ -64,13 +66,15 @@ export default function TrainingPage() {
     return [...cats].sort();
   }, [summaries]);
 
+  const hasEvalData = chartData.length > 0;
+
   if (loading) return <Spinner />;
 
-  if (!index?.runs.some((r) => r.training_step != null)) {
+  if (trainingRuns.length === 0 && !hasEvalData) {
     return (
       <EmptyState
         title="No training runs"
-        description="No runs with training_step found. Training progression will appear here once training runs are synced."
+        description="Run viewer_sync.py to discover training runs from GPU boxes."
       />
     );
   }
@@ -78,118 +82,132 @@ export default function TrainingPage() {
   return (
     <div className="space-y-8">
       <div>
-        <h1 className="text-lg font-semibold">Training Progression</h1>
+        <h1 className="text-lg font-semibold">Training</h1>
         <p className="text-sm text-text-tertiary">
-          Performance metrics over training steps
+          Active and completed training runs
         </p>
       </div>
 
-      {/* Pass Rate Chart */}
-      <Card>
-        <h2 className="text-sm font-medium mb-4">Pass Rate</h2>
-        <ResponsiveContainer width="100%" height={300}>
-          <LineChart data={chartData}>
-            <CartesianGrid strokeDasharray="3 3" stroke="#eaeaea" />
-            <XAxis dataKey="step" stroke="#999" fontSize={12} />
-            <YAxis stroke="#999" fontSize={12} domain={[0, 1]} tickFormatter={(v: number) => `${(v * 100).toFixed(0)}%`} />
-            <Tooltip
-              {...tooltipStyle}
-              formatter={(value) => [`${(Number(value) * 100).toFixed(1)}%`, "Pass Rate"]}
-            />
-            <Line type="monotone" dataKey="pass_rate" stroke="#0070f3" strokeWidth={2} dot={{ r: 3 }} />
-          </LineChart>
-        </ResponsiveContainer>
-      </Card>
-
-      {/* Tool Score Chart */}
-      <Card>
-        <h2 className="text-sm font-medium mb-4">Average Tool Score</h2>
-        <ResponsiveContainer width="100%" height={300}>
-          <LineChart data={chartData}>
-            <CartesianGrid strokeDasharray="3 3" stroke="#eaeaea" />
-            <XAxis dataKey="step" stroke="#999" fontSize={12} />
-            <YAxis stroke="#999" fontSize={12} domain={[0, 1]} />
-            <Tooltip
-              {...tooltipStyle}
-              formatter={(value) => [Number(value).toFixed(3), "Tool Score"]}
-            />
-            <Line type="monotone" dataKey="avg_tool_score" stroke="#0cce6b" strokeWidth={2} dot={{ r: 3 }} />
-          </LineChart>
-        </ResponsiveContainer>
-      </Card>
-
-      {/* Per-Category Pass Rates */}
-      {allCategories.length > 0 && (
-        <Card>
-          <h2 className="text-sm font-medium mb-4">Per-Category Pass Rates</h2>
-          <ResponsiveContainer width="100%" height={350}>
-            <LineChart data={chartData}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#eaeaea" />
-              <XAxis dataKey="step" stroke="#999" fontSize={12} />
-              <YAxis stroke="#999" fontSize={12} domain={[0, 1]} tickFormatter={(v: number) => `${(v * 100).toFixed(0)}%`} />
-              <Tooltip
-                {...tooltipStyle}
-                formatter={(value, name) => [
-                  `${(Number(value) * 100).toFixed(1)}%`,
-                  String(name).replace("cat_", ""),
-                ]}
-              />
-              <Legend formatter={(value: string) => value.replace("cat_", "")} />
-              {allCategories.map((cat, i) => (
-                <Line
-                  key={cat}
-                  type="monotone"
-                  dataKey={`cat_${cat}`}
-                  stroke={CHART_COLORS[i % CHART_COLORS.length]}
-                  strokeWidth={2}
-                  dot={{ r: 2 }}
-                />
-              ))}
-            </LineChart>
-          </ResponsiveContainer>
-        </Card>
+      {/* Training Runs */}
+      {trainingRuns.length > 0 && (
+        <div className="space-y-3">
+          {trainingRuns.map((run) => (
+            <TrainingRunCard key={run.run_id} run={run} />
+          ))}
+        </div>
       )}
 
-      {/* Data table */}
-      <div className="rounded-lg border border-border overflow-hidden">
-        <div className="border-b border-border px-4 py-3">
-          <h2 className="text-sm font-medium">Training Steps</h2>
-        </div>
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-border text-left text-xs text-text-tertiary">
-                <th className="px-4 py-2 font-medium">Step</th>
-                <th className="px-4 py-2 font-medium">Pass Rate</th>
-                <th className="px-4 py-2 font-medium">Tool Score</th>
-                {allCategories.map((cat) => (
-                  <th key={cat} className="px-4 py-2 font-medium">{cat}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {chartData.map((row) => (
-                <tr key={row.step} className="border-b border-border last:border-0 hover:bg-bg-hover transition-colors">
-                  <td className="px-4 py-2.5 tabular-nums font-medium">{row.step}</td>
-                  <td className="px-4 py-2.5 tabular-nums text-text-secondary">
-                    {formatPercent(row.pass_rate)}
-                  </td>
-                  <td className="px-4 py-2.5 tabular-nums text-text-secondary">
-                    {row.avg_tool_score.toFixed(3)}
-                  </td>
-                  {allCategories.map((cat) => (
-                    <td key={cat} className="px-4 py-2.5 tabular-nums text-text-secondary">
-                      {(row as Record<string, unknown>)[`cat_${cat}`] != null
-                        ? formatPercent((row as Record<string, number>)[`cat_${cat}`])
-                        : "-"}
-                    </td>
+      {/* Eval Progression Charts (only if checkpoint evals exist) */}
+      {hasEvalData && (
+        <>
+          <div className="pt-4">
+            <h2 className="text-sm font-semibold mb-1">GAIA2 Eval Progression</h2>
+            <p className="text-xs text-text-tertiary">
+              Pass rate and tool score from checkpoint evaluations
+            </p>
+          </div>
+
+          <Card>
+            <h2 className="text-sm font-medium mb-4">Pass Rate</h2>
+            <ResponsiveContainer width="100%" height={300}>
+              <LineChart data={chartData}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#eaeaea" />
+                <XAxis dataKey="step" stroke="#999" fontSize={12} />
+                <YAxis stroke="#999" fontSize={12} domain={[0, 1]} tickFormatter={(v: number) => `${(v * 100).toFixed(0)}%`} />
+                <Tooltip
+                  {...tooltipStyle}
+                  formatter={(value) => [`${(Number(value) * 100).toFixed(1)}%`, "Pass Rate"]}
+                />
+                <Line type="monotone" dataKey="pass_rate" stroke="#0070f3" strokeWidth={2} dot={{ r: 3 }} />
+              </LineChart>
+            </ResponsiveContainer>
+          </Card>
+
+          <Card>
+            <h2 className="text-sm font-medium mb-4">Average Tool Score</h2>
+            <ResponsiveContainer width="100%" height={300}>
+              <LineChart data={chartData}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#eaeaea" />
+                <XAxis dataKey="step" stroke="#999" fontSize={12} />
+                <YAxis stroke="#999" fontSize={12} domain={[0, 1]} />
+                <Tooltip
+                  {...tooltipStyle}
+                  formatter={(value) => [Number(value).toFixed(3), "Tool Score"]}
+                />
+                <Line type="monotone" dataKey="avg_tool_score" stroke="#0cce6b" strokeWidth={2} dot={{ r: 3 }} />
+              </LineChart>
+            </ResponsiveContainer>
+          </Card>
+
+          {allCategories.length > 0 && (
+            <Card>
+              <h2 className="text-sm font-medium mb-4">Per-Category Pass Rates</h2>
+              <ResponsiveContainer width="100%" height={350}>
+                <LineChart data={chartData}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#eaeaea" />
+                  <XAxis dataKey="step" stroke="#999" fontSize={12} />
+                  <YAxis stroke="#999" fontSize={12} domain={[0, 1]} tickFormatter={(v: number) => `${(v * 100).toFixed(0)}%`} />
+                  <Tooltip
+                    {...tooltipStyle}
+                    formatter={(value, name) => [
+                      `${(Number(value) * 100).toFixed(1)}%`,
+                      String(name).replace("cat_", ""),
+                    ]}
+                  />
+                  <Legend formatter={(value: string) => value.replace("cat_", "")} />
+                  {allCategories.map((cat, i) => (
+                    <Line
+                      key={cat}
+                      type="monotone"
+                      dataKey={`cat_${cat}`}
+                      stroke={CHART_COLORS[i % CHART_COLORS.length]}
+                      strokeWidth={2}
+                      dot={{ r: 2 }}
+                    />
                   ))}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
+                </LineChart>
+              </ResponsiveContainer>
+            </Card>
+          )}
+        </>
+      )}
     </div>
+  );
+}
+
+function TrainingRunCard({ run }: { run: TrainingRun }) {
+  return (
+    <Card>
+      <div className="flex items-start justify-between gap-4">
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2 mb-1">
+            <h3 className="text-sm font-semibold truncate">{run.run_name || run.model_name}</h3>
+            <Badge variant={run.status === "active" ? "success" : "muted"}>
+              {run.status}
+            </Badge>
+          </div>
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-text-secondary">
+            <span>{run.model_name}</span>
+            <span className="text-text-tertiary">{run.box}</span>
+            {run.gpu && <span className="text-text-tertiary">{run.gpu}</span>}
+            {run.checkpoints.length > 0 && (
+              <span className="text-text-tertiary">
+                {run.checkpoints.length} checkpoints (step {run.checkpoints[0]}&ndash;{run.checkpoints[run.checkpoints.length - 1]})
+              </span>
+            )}
+          </div>
+        </div>
+        {run.wandb_url && (
+          <a
+            href={run.wandb_url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="shrink-0 rounded-md border border-border px-3 py-1.5 text-xs font-medium text-accent hover:bg-bg-hover transition-colors"
+          >
+            wandb
+          </a>
+        )}
+      </div>
+    </Card>
   );
 }
