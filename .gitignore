@@ -6,3 +6,7 @@ __pycache__/
 dist/
 build/
 wandb/
+viewer/data/
+viewer/.next/
+viewer/node_modules/
+viewer/public/data/

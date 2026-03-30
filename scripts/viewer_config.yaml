@@ -1,0 +1,8 @@
+boxes:
+  - ssh_host: h100-dev-box-1
+    data_paths: [/data/viewer_data, /data/gaia2_baselines]
+  - ssh_host: h100-dev-box-3
+    data_paths: [/data/viewer_data, /data/gaia2_baselines]
+  - ssh_host: h100-dev-box-4
+    data_paths: [/data/viewer_data, /data/gaia2_baselines]
+viewer_port: 9000
