@@ -1,0 +1,28 @@
+[
+  {
+    "name": "GRPO",
+    "n_samples": 200,
+    "kl_forward_mean": 0.0007377639262995217,
+    "kl_forward_std": 0.00016438271829513013,
+    "kl_forward_median": 0.0007285319152288139,
+    "kl_reverse_mean": 0.0007374293818429578,
+    "kl_reverse_std": 0.00016294215920424689,
+    "base_mean_logp": -2.910668343901634,
+    "ft_mean_logp": -2.910311687588692,
+    "base_ppl": 18.36907196044922,
+    "ft_ppl": 18.36252212524414
+  },
+  {
+    "name": "SDPO",
+    "n_samples": 200,
+    "kl_forward_mean": 0.0017169967386871576,
+    "kl_forward_std": 0.0005870725094676163,
+    "kl_forward_median": 0.0016285922611132264,
+    "kl_reverse_mean": 0.0017417831829516217,
+    "kl_reverse_std": 0.0006455113042481017,
+    "base_mean_logp": -2.910668343901634,
+    "ft_mean_logp": -2.9029530799388885,
+    "base_ppl": 18.36907196044922,
+    "ft_ppl": 18.227895736694336
+  }
+]
