@@ -33,6 +33,24 @@ REPO_ROOT = SCRIPT_DIR.parent
 VIEWER_DATA = REPO_ROOT / "viewer" / "public" / "data"
 CATEGORIES = ["search", "time", "execution", "adaptability", "ambiguity"]
 
+# Cache benchmark oracle data for tool score computation
+_benchmark_oracle: dict[str, list[str]] | None = None
+
+def get_benchmark_oracle() -> dict[str, list[str]]:
+    """Load oracle function names per scenario from benchmark.json."""
+    global _benchmark_oracle
+    if _benchmark_oracle is not None:
+        return _benchmark_oracle
+    bm_path = VIEWER_DATA / "benchmark.json"
+    _benchmark_oracle = {}
+    if bm_path.exists():
+        bm = json.loads(bm_path.read_text())
+        for s in bm.get("scenarios", []):
+            fns = ["%s__%s" % (a["app"], a["function"]) for a in s.get("oracle_actions", [])]
+            if fns:
+                _benchmark_oracle[s["scenario_id"]] = fns
+    return _benchmark_oracle
+
 
 def load_config(path: str) -> dict:
     with open(path) as f:
@@ -132,10 +150,20 @@ def discover_are_runs(config: dict) -> list[dict]:
         for run_dir, cats in run_dirs.items():
             # Derive model name from path
             # e.g. /data/gaia2_baselines/Qwen3-14B/20260329_200215_full
+            # or   /data/gaia2_baselines/claude-haiku-4.5/us.anthropic..../20260329_full
             parts = Path(run_dir).parts
-            # Model name is typically 2 levels up from the timestamp dir
-            model_name = parts[-2] if len(parts) >= 2 else parts[-1]
             timestamp = parts[-1] if len(parts) >= 1 else ""
+            # Walk up from the timestamp dir, skip parts that look like
+            # timestamps, AWS model IDs, or known base dirs
+            model_name = parts[-2] if len(parts) >= 2 else parts[-1]
+            for p in reversed(parts[:-1]):
+                if re.match(r"^\d{8}_", p) or p in ("data", "gaia2_baselines"):
+                    continue
+                # Prefer shorter, cleaner names (skip long AWS-style IDs
+                # if a shorter parent exists)
+                if "." not in p or len(p) < len(model_name):
+                    model_name = p
+                    break
 
             discovered.append({
                 "host": host,
@@ -348,6 +376,70 @@ def fetch_single_detail(run_id: str, scenario_id: str) -> bool:
         return False
 
 
+def _sum_tokens(val) -> int:
+    """Sum token values that may be int or list of ints."""
+    if isinstance(val, list):
+        return sum(v for v in val if isinstance(v, (int, float)))
+    if isinstance(val, (int, float)):
+        return int(val)
+    return 0
+
+
+def _extract_agent_tools(messages: list[dict]) -> list[str]:
+    """Extract tool function names the agent called from conversation messages."""
+    tools = []
+    for msg in messages:
+        content = msg.get("content", "")
+        if msg.get("role") != "assistant":
+            continue
+        # ARE format: Action: {"tool_name": "App__function", ...} or tool_calls
+        for m in re.finditer(r'"tool_name"\s*:\s*"([^"]+)"', content):
+            tools.append(m.group(1))
+        for m in re.finditer(r'"name"\s*:\s*"([^"]+)"', content):
+            name = m.group(1)
+            if "__" in name:
+                tools.append(name)
+    return tools
+
+
+def _compute_tool_score(scenario_id: str, agent_tools: list[str]) -> tuple[float, list[dict]]:
+    """Compute tool overlap score: fraction of oracle tool functions the agent called.
+
+    Returns (score, per_tool_comparison).
+    """
+    oracle = get_benchmark_oracle()
+    oracle_fns = oracle.get(scenario_id, [])
+    if not oracle_fns:
+        return 0.0, []
+
+    oracle_counts: dict[str, int] = {}
+    for fn in oracle_fns:
+        oracle_counts[fn] = oracle_counts.get(fn, 0) + 1
+
+    agent_counts: dict[str, int] = {}
+    for fn in agent_tools:
+        agent_counts[fn] = agent_counts.get(fn, 0) + 1
+
+    all_tools = sorted(set(list(oracle_counts.keys()) + list(agent_counts.keys())))
+
+    per_tool = []
+    matched = 0
+    total_oracle = len(oracle_fns)
+    for tool in all_tools:
+        oc = oracle_counts.get(tool, 0)
+        ac = agent_counts.get(tool, 0)
+        per_tool.append({
+            "tool": tool,
+            "agent": ac,
+            "oracle": oc,
+            "delta": ac - oc,
+        })
+        matched += min(ac, oc)
+
+    score = matched / total_oracle if total_oracle > 0 else 0.0
+    return score, per_tool
+
+
 def convert_lite_trace(path: Path, meta: dict):
     """Convert an ARE lite trace JSON to viewer detail format in-place."""
     trace = json.loads(path.read_text())
@@ -365,35 +457,45 @@ def convert_lite_trace(path: Path, meta: dict):
                 task_prompt = content
         break
 
-    # Extract token usage
+    # Extract token usage (values may be arrays or ints)
     prompt_tokens = 0
     completion_tokens = 0
     usage = trace.get("per_agent_llm_usage_stats", {})
     for agent_id, stats in usage.items():
         if isinstance(stats, dict):
-            prompt_tokens = stats.get("prompt_tokens", 0)
-            completion_tokens = stats.get("completion_tokens", 0)
+            prompt_tokens = _sum_tokens(stats.get("prompt_tokens", 0))
+            completion_tokens = _sum_tokens(stats.get("completion_tokens", 0))
         break
 
+    # Compute tool overlap score from oracle actions
+    scenario_id = meta.get("scenario_id", trace.get("scenario_id", ""))
+    agent_tools = _extract_agent_tools(conversation)
+    tool_score, per_tool = _compute_tool_score(scenario_id, agent_tools)
+
+    n_tool_calls = len(agent_tools)
+    oracle_fns = get_benchmark_oracle().get(scenario_id, [])
+    tool_efficiency = n_tool_calls / len(oracle_fns) if oracle_fns and n_tool_calls > 0 else 0
+
     detail = {
-        "scenario_id": meta.get("scenario_id", trace.get("scenario_id", "")),
+        "scenario_id": scenario_id,
         "category": meta.get("category", ""),
         "task_prompt": task_prompt,
         "expected_answer": "",
         "model_answer": "",
-        "oracle_events": [],
+        "oracle_events": [{"tool": fn} for fn in oracle_fns],
         "validation_decision": trace.get("validation_decision", "Valid" if meta.get("is_pass") else "Invalid"),
         "validation_rationale": trace.get("validation_rationale", meta.get("rationale", "")),
-        "per_tool": [],
+        "per_tool": per_tool,
         "conversation": conversation,
         "metrics": {
-            "tool_score": meta.get("score", 0),
+            "tool_score": tool_score,
             "total_tokens": prompt_tokens + completion_tokens,
             "prompt_tokens": prompt_tokens,
             "completion_tokens": completion_tokens,
             "duration_s": trace.get("run_duration", 0),
-            "tool_efficiency": 0,
+            "tool_efficiency": tool_efficiency,
             "failure_type": "success" if meta.get("is_pass") else "failed",
+            "n_tool_calls": n_tool_calls,
         },
     }
 
@@ -404,101 +506,100 @@ def convert_lite_trace(path: Path, meta: dict):
 # Training run discovery
 # ---------------------------------------------------------------------------
 
-def discover_training_runs(config: dict) -> list[dict]:
-    """Find active/recent training runs by checking wandb dirs and processes."""
-    training_runs = []
+def _discover_box_info(config: dict) -> dict[str, dict]:
+    """SSH into boxes to find which wandb run IDs are there + GPU info.
+
+    Returns {wandb_run_id: {"box": host, "gpu": gpu_name}}.
+    """
+    box_map: dict[str, dict] = {}
 
     for box in config.get("boxes", []):
         host = box["ssh_host"]
-        print(f"  {host}...", end="", flush=True)
-
-        if ssh_run(host, "echo ok", timeout=5) is None:
-            print(" unreachable")
-            continue
-
-        # Find wandb URLs from claas.log (active training)
-        wandb_info = ssh_run(host, r"""
-            grep -h 'View run at' /tmp/claas.log 2>/dev/null | tail -1;
+        info = ssh_run(host, r"""
+            grep -oh '[a-z0-9]\{8\}' /tmp/claas*.log /tmp/gaia2*.log 2>/dev/null | sort -u;
             echo '---';
-            grep -h 'Syncing run' /tmp/claas.log 2>/dev/null | tail -1;
-            echo '---';
-            pgrep -fa 'serve.main|verl|sdpo|wake_sleep|train' 2>/dev/null | grep -v grep | head -1;
-            echo '---';
-            ls -d /data/checkpoints/*/global_step_* 2>/dev/null;
+            grep -h 'View run at' /tmp/claas*.log /tmp/gaia2*.log 2>/dev/null;
             echo '---';
             nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1
-        """, timeout=15)
-
-        if not wandb_info:
-            print(" no data")
+        """, timeout=10)
+        if not info:
             continue
 
-        parts = wandb_info.split("---")
-        wandb_url_line = parts[0].strip() if len(parts) > 0 else ""
-        run_name_line = parts[1].strip() if len(parts) > 1 else ""
-        active_process = parts[2].strip() if len(parts) > 2 else ""
-        checkpoint_dirs = parts[3].strip() if len(parts) > 3 else ""
-        gpu_name = parts[4].strip() if len(parts) > 4 else ""
+        parts = info.split("---")
+        url_lines = parts[1].strip() if len(parts) > 1 else ""
+        gpu_name = parts[2].strip() if len(parts) > 2 else ""
 
-        # Parse wandb URL
-        wandb_url = ""
-        if "https://" in wandb_url_line:
-            wandb_url = wandb_url_line.split("https://")[-1]
-            wandb_url = "https://" + wandb_url.strip().rstrip(")")
+        # Extract run IDs from wandb URLs (most reliable)
+        for line in url_lines.split("\n"):
+            if "https://" in line:
+                url = line.split("https://")[-1].strip().rstrip(")")
+                rid = url.rstrip("/").split("/")[-1]
+                if rid and rid not in box_map:
+                    box_map[rid] = {"box": host, "gpu": gpu_name}
 
-        # Parse run name
-        run_name = ""
-        if "Syncing run" in run_name_line:
-            run_name = run_name_line.split("Syncing run")[-1].strip()
+    return box_map
 
-        if not wandb_url and not active_process:
-            print(" no training runs")
-            continue
 
-        # Parse checkpoints — paths like /data/checkpoints/model-name/global_step_100
-        checkpoints = []
-        checkpoint_model = ""
-        if checkpoint_dirs:
-            for line in checkpoint_dirs.split("\n"):
-                line = line.strip().rstrip("/")
-                name = Path(line).name
-                if name.startswith("global_step_"):
-                    try:
-                        checkpoints.append(int(name.replace("global_step_", "")))
-                    except ValueError:
-                        pass
-                    if not checkpoint_model:
-                        checkpoint_model = Path(line).parent.name
-        checkpoints.sort()
+def discover_training_runs(config: dict) -> list[dict]:
+    """Fetch training runs from wandb API, enriched with box/GPU info from SSH."""
+    wandb_project = config.get("wandb_project", "")
+    if not wandb_project:
+        print("  No wandb_project in config, skipping.")
+        return []
 
-        # Determine model name from run name, checkpoint path, or fallback
-        model_name = run_name or checkpoint_model or "Unknown"
+    try:
+        import wandb as wb
+        api = wb.Api()
+    except ImportError:
+        print("  wandb not installed, skipping. pip install wandb")
+        return []
+    except Exception as e:
+        print("  wandb API error: %s" % e)
+        return []
 
-        is_active = bool(active_process)
+    # 1. Fetch runs from wandb — only training/eval runs, not baselines
+    # Baselines have config keys like "benchmark", "framework";
+    # training runs have "trainer", "algorithm", "wake_sleep";
+    # eval runs from scaffold have "configs", "server_url", "global_step"
+    TRAINING_CONFIG_KEYS = {"trainer", "algorithm", "wake_sleep", "configs", "server_url", "global_step"}
+    try:
+        all_runs = list(api.runs(wandb_project, per_page=50))
+    except Exception as e:
+        print("  Failed to fetch runs: %s" % e)
+        return []
 
-        # Extract wandb project from URL
-        wandb_project = ""
-        if wandb_url:
-            # https://wandb.ai/team/project/runs/id
-            url_parts = wandb_url.rstrip("/").split("/")
-            if len(url_parts) >= 5:
-                wandb_project = url_parts[-3] if "runs" in url_parts else ""
+    runs = []
+    for r in all_runs:
+        config_keys = set(dict(r.config).keys()) if r.config else set()
+        if config_keys & TRAINING_CONFIG_KEYS:
+            runs.append(r)
+    print("  wandb: %d training run(s) (of %d total)" % (len(runs), len(all_runs)))
+
+    # 2. SSH into boxes to map run IDs to machines
+    print("  Matching to boxes...", end="", flush=True)
+    box_map = _discover_box_info(config)
+    print(" %d run(s) matched" % len(box_map))
+
+    # 3. Merge
+    training_runs = []
+    for r in runs:
+        tags = r.tags or []
+        box_info = box_map.get(r.id, {})
 
         training_runs.append({
-            "run_id": f"training-{host}-{slugify(model_name)}",
-            "run_name": run_name,
-            "model_name": model_name,
-            "box": host,
-            "wandb_url": wandb_url,
+            "run_id": "wandb-%s" % r.id,
+            "run_name": r.name,
+            "model_name": r.name,
+            "box": box_info.get("box", ""),
+            "wandb_url": r.url,
+            "wandb_run_id": r.id,
             "wandb_project": wandb_project,
-            "started_at": "",
-            "status": "active" if is_active else "complete",
-            "checkpoints": checkpoints,
-            "gpu": gpu_name,
+            "started_at": r.created_at or "",
+            "status": "active" if r.state == "running" else r.state,
+            "checkpoints": [],
+            "gpu": box_info.get("gpu", ""),
+            "config_summary": ", ".join(tags) if tags else "",
         })
-
-        status = "active" if is_active else "complete"
-        print(f" {run_name} ({status}, {len(checkpoints)} checkpoints)")
 
     return training_runs
 
@@ -574,13 +675,33 @@ def main():
     if not runs:
         print("  No eval runs found.")
     else:
-        print(f"\nSyncing {len(runs)} eval run(s)...")
+        # Deduplicate: keep only the best run (most categories) per model per box
+        best: dict[tuple[str, str], dict] = {}
         for run in runs:
-            run_id = slugify(run["model_name"]) + "-baseline"
+            key = (run["host"], run["model_name"])
+            if key not in best or len(run["categories"]) > len(best[key]["categories"]):
+                best[key] = run
+        deduped = list(best.values())
+
+        # If same model appears on multiple boxes, include box in run_id
+        model_counts: dict[str, int] = {}
+        for run in deduped:
+            model_counts[run["model_name"]] = model_counts.get(run["model_name"], 0) + 1
+
+        print("\nSyncing %d eval run(s)..." % len(deduped))
+        for run in deduped:
+            slug = slugify(run["model_name"])
+            box_short = run["host"].replace("h100-dev-", "")
+            if model_counts[run["model_name"]] > 1:
+                run_id = "%s-%s-baseline" % (slug, slugify(run["host"]))
+                display_name = "%s (%s)" % (run["model_name"], box_short)
+            else:
+                run_id = "%s-baseline" % slug
+                display_name = run["model_name"]
             convert_run(
                 host=run["host"],
                 remote_dir=run["remote_dir"],
-                model_name=run["model_name"],
+                model_name=display_name,
                 categories=run["categories"],
                 run_id=run_id,
                 fetch_details=args.full,

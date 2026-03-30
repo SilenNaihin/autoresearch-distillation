@@ -74,11 +74,13 @@ export default function ScenariosPage() {
     });
   }, [summary, search, selectedCategories, passFilter, failureType, sort]);
 
+  const descFirstFields = new Set(["tool_score", "passed", "n_messages", "duration_s"]);
+
   function toggleSort(field: string) {
     setSort((prev) =>
       prev.field === field
         ? { field, dir: prev.dir === "asc" ? "desc" : "asc" }
-        : { field, dir: "asc" }
+        : { field, dir: descFirstFields.has(field) ? "desc" : "asc" }
     );
   }
 
@@ -220,8 +222,8 @@ export default function ScenariosPage() {
                     onClick={() => router.push(`/scenarios/${encodeURIComponent(s.scenario_id)}?run=${encodeURIComponent(selectedRun)}`)}
                     className="border-b border-border last:border-0 hover:bg-bg-hover transition-colors cursor-pointer"
                   >
-                    <td className="px-4 py-2.5 font-medium font-mono text-xs">
-                      {s.scenario_id.length > 20 ? s.scenario_id.slice(0, 20) + "..." : s.scenario_id}
+                    <td className="px-4 py-2.5 font-medium font-mono text-xs max-w-[200px] truncate">
+                      {s.scenario_id}
                     </td>
                     <td className="px-4 py-2.5">
                       <Badge>{s.category}</Badge>

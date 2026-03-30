@@ -18,9 +18,10 @@ export interface TrainingRun {
   model_name: string;
   box: string;
   wandb_url: string;
+  wandb_run_id?: string;
   wandb_project: string;
   started_at: string;
-  status: "active" | "complete";
+  status: string;
   checkpoints: number[];
   gpu: string;
   config_summary?: string;
@@ -107,9 +108,9 @@ export interface ScenarioDetail {
   conversation: ConversationMessage[];
   metrics: {
     tool_score: number;
-    total_tokens: number;
-    prompt_tokens: number;
-    completion_tokens: number;
+    total_tokens: number | number[];
+    prompt_tokens: number | number[];
+    completion_tokens: number | number[];
     duration_s: number;
     tool_efficiency: number;
     failure_type: string;

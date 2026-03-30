@@ -39,7 +39,9 @@ export default function TrainingPage() {
     });
   }, []);
 
-  const trainingRuns = index?.training_runs ?? [];
+  const trainingRuns = [...(index?.training_runs ?? [])].sort(
+    (a, b) => (b.started_at ?? "").localeCompare(a.started_at ?? "")
+  );
 
   const chartData = useMemo(() => {
     return summaries
@@ -175,25 +177,39 @@ export default function TrainingPage() {
   );
 }
 
+const STATUS_VARIANT: Record<string, "success" | "error" | "warning" | "muted"> = {
+  active: "success",
+  running: "success",
+  finished: "muted",
+  complete: "muted",
+  crashed: "error",
+  failed: "error",
+};
+
 function TrainingRunCard({ run }: { run: TrainingRun }) {
+  const startDate = run.started_at
+    ? new Date(run.started_at).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })
+    : null;
+
   return (
     <Card>
       <div className="flex items-start justify-between gap-4">
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 mb-1">
             <h3 className="text-sm font-semibold truncate">{run.run_name || run.model_name}</h3>
-            <Badge variant={run.status === "active" ? "success" : "muted"}>
+            {run.wandb_run_id && (
+              <span className="font-mono text-[11px] text-text-tertiary">{run.wandb_run_id}</span>
+            )}
+            <Badge variant={STATUS_VARIANT[run.status] ?? "muted"}>
               {run.status}
             </Badge>
           </div>
           <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-text-secondary">
-            <span>{run.model_name}</span>
-            <span className="text-text-tertiary">{run.box}</span>
+            {run.box && <span>{run.box.replace("h100-dev-", "")}</span>}
             {run.gpu && <span className="text-text-tertiary">{run.gpu}</span>}
-            {run.checkpoints.length > 0 && (
-              <span className="text-text-tertiary">
-                {run.checkpoints.length} checkpoints (step {run.checkpoints[0]}&ndash;{run.checkpoints[run.checkpoints.length - 1]})
-              </span>
+            {startDate && <span className="text-text-tertiary">{startDate}</span>}
+            {run.config_summary && (
+              <span className="text-text-tertiary">{run.config_summary}</span>
             )}
           </div>
         </div>

@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { fetchIndex, fetchSummary, formatPercent } from "@/lib/data";
 import type { RunIndex, RunSummary } from "@/lib/types";
-import { StatCard, EmptyState, Spinner } from "./ui";
+import { StatCard, EmptyState, Spinner, Badge } from "./ui";
 
 export function DashboardClient() {
   const [index, setIndex] = useState<RunIndex | null>(null);
@@ -55,17 +55,36 @@ export function DashboardClient() {
             Model evaluation overview
           </p>
         </div>
-        <select
-          value={selectedRun}
-          onChange={(e) => setSelectedRun(e.target.value)}
-          className="rounded-md border border-border bg-bg-input px-3 py-1.5 text-sm text-text outline-none focus:border-accent"
-        >
-          {index.runs.map((r) => (
-            <option key={r.run_id} value={r.run_id}>
-              {r.model_name} ({r.timestamp?.slice(0, 10)})
-            </option>
-          ))}
-        </select>
+        <div className="flex items-center gap-2">
+          <select
+            value={selectedRun}
+            onChange={(e) => setSelectedRun(e.target.value)}
+            className="rounded-md border border-border bg-bg-input px-3 py-1.5 text-sm text-text outline-none focus:border-accent"
+          >
+            {index.runs.map((r) => (
+              <option key={r.run_id} value={r.run_id}>
+                {r.model_name} ({r.timestamp?.slice(0, 10)})
+              </option>
+            ))}
+          </select>
+          <button
+            onClick={async () => {
+              if (!selectedRun) return;
+              const name = index.runs.find((r) => r.run_id === selectedRun)?.model_name ?? selectedRun;
+              if (!confirm(`Delete run "${name}"? This cannot be undone.`)) return;
+              const res = await fetch(`/api/runs/${encodeURIComponent(selectedRun)}`, { method: "DELETE" });
+              if (res.ok) {
+                const newRuns = index.runs.filter((r) => r.run_id !== selectedRun);
+                setIndex({ ...index, runs: newRuns });
+                setSelectedRun(newRuns[0]?.run_id ?? "");
+              }
+            }}
+            className="rounded-md border border-border px-2.5 py-1.5 text-xs text-error hover:bg-error/10 transition-colors"
+            title="Delete this run"
+          >
+            Delete
+          </button>
+        </div>
       </div>
 
       {loading ? (

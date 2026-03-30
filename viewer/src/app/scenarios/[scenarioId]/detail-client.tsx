@@ -7,6 +7,12 @@ import type { ScenarioDetail } from "@/lib/types";
 import { Card, Badge, Spinner, EmptyState } from "@/components/ui";
 import { ConversationTimeline } from "@/components/conversation";
 
+function sumMetric(v: number | number[] | undefined): number {
+  if (v == null) return 0;
+  if (Array.isArray(v)) return v.reduce((a, b) => a + b, 0);
+  return v;
+}
+
 export function ScenarioDetailClient({
   scenarioId,
   runId,
@@ -49,7 +55,8 @@ export function ScenarioDetailClient({
   const prevId = currentIdx > 0 ? scenarioIds[currentIdx - 1] : null;
   const nextId = currentIdx < scenarioIds.length - 1 ? scenarioIds[currentIdx + 1] : null;
 
-  const passed = detail.validation_decision === "correct";
+  const decision = detail.validation_decision?.toLowerCase() ?? "";
+  const passed = decision === "valid" || decision === "correct" || detail.metrics.failure_type === "success";
 
   return (
     <div className="space-y-6">
@@ -173,9 +180,9 @@ export function ScenarioDetailClient({
               {[
                 { label: "Tool Score", value: detail.metrics.tool_score.toFixed(2) },
                 { label: "Duration", value: formatDuration(detail.metrics.duration_s) },
-                { label: "Total Tokens", value: detail.metrics.total_tokens.toLocaleString() },
-                { label: "Prompt Tokens", value: detail.metrics.prompt_tokens.toLocaleString() },
-                { label: "Completion Tokens", value: detail.metrics.completion_tokens.toLocaleString() },
+                { label: "Total Tokens", value: sumMetric(detail.metrics.total_tokens).toLocaleString() },
+                { label: "Prompt Tokens", value: sumMetric(detail.metrics.prompt_tokens).toLocaleString() },
+                { label: "Completion Tokens", value: sumMetric(detail.metrics.completion_tokens).toLocaleString() },
                 { label: "Tool Efficiency", value: formatPercent(detail.metrics.tool_efficiency) },
                 { label: "Failure Type", value: detail.metrics.failure_type || "-" },
               ].map((item) => (
