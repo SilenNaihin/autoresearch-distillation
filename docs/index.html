@@ -311,10 +311,11 @@
         benchmark &mdash; we train <strong>Qwen3-14B</strong> with SDPO to minimize validation loss on a GPT
         pretraining script. Over 495 training steps, SDPO converges to <strong>val_bpb&nbsp;~1.025</strong>
         and holds steady for 300+ steps, achieving a best of <strong>1.023</strong> (&minus;3.1%).
-        GRPO reaches only &minus;1.8% despite 128 rollouts/step (~94M tokens).
-        Compared against Claude Opus 4.6 (&minus;2.8% ICL) and Claude Haiku 4.5 (&minus;4.4%
-        single-turn, high variance), the SDPO-trained 14B model matches or exceeds much larger
-        API models while learning stable exploration patterns encoded in its weights.
+        Our GRPO run &mdash; 38 steps with 128 rollouts/step (~94M tokens), after adding a KL penalty
+        and batch normalization to stabilize training &mdash; plateaus at &minus;1.8%.
+        Compared against Claude Haiku 4.5 (&minus;4.4% single-turn, high variance), the SDPO-trained
+        14B model matches or exceeds much larger API models while learning stable exploration patterns
+        encoded in its weights.
       </p>
     </div>
   </section>
@@ -503,7 +504,8 @@
         <a href="https://github.com/karpathy/autoresearch/discussions/43">126-experiment run</a>
         (0.998 &rarr; 0.970, different absolute baseline). Claude Haiku single has high variance
         (avg 1.070); SDPO ckpt + ICL offers similar best-case from a 14B open-source model.
-        GRPO uses 128 rollouts/step (group_size=8) but plateaus at &minus;1.8%.
+        Our GRPO run uses 128 rollouts/step (group_size=8) with KL penalty and batch-normalized
+        advantages; plateaus at &minus;1.8%.
       </p>
     </div>
   </section>
@@ -531,8 +533,10 @@
     <h3>GRPO <span class="pill pill-rl">RL</span></h3>
     <p>
       Group Relative Policy Optimization uses reward differences <em>within</em> a group as the learning
-      signal. We bumped the group size to 8 (128 rollouts/step vs SDPO&rsquo;s 16) to give GRPO more
-      signal per step. Over 38 steps (~94M tokens), GRPO reaches
+      signal. Our initial GRPO runs showed no return signal at all, so we added a KL penalty term
+      (coefficient 1e-5) and batch normalization on the advantages to stabilize training. We also
+      bumped the group size to 8 (128 rollouts/step vs SDPO&rsquo;s 16) to give GRPO more signal
+      per step. Over 38 steps (~94M tokens), our GRPO run reaches
       <strong>val_bpb&nbsp;=&nbsp;1.037</strong> (&minus;1.8%) with entropy stable at ~0.30 but
       no continued improvement. SDPO achieves &minus;3.1% in ~137M tokens &mdash; better results from
       only 1.5&times; more tokens, with entropy <em>increasing</em> (0.28&rarr;0.61).
@@ -708,9 +712,10 @@
     </p>
     <p>
       <strong>SDPO breaks out.</strong> Weight updates encode exploration patterns that persist across
-      rollouts without consuming context. SDPO converges to ~1.025 and holds steady for 300+ steps,
-      while GRPO plateaus at 1.037 despite 128 rollouts/step. The trained 14B checkpoint (1.023) matches
-      Claude Opus ICL (1.027) &mdash; a model with orders of magnitude more parameters.
+      rollouts without consuming context. SDPO converges to ~1.025 and holds steady for 300+ steps
+      with 16 rollouts/step (~137M tokens total). Our GRPO run, despite 128 rollouts/step (~94M tokens)
+      and the addition of a KL penalty and batch-normalized advantages, plateaus at 1.037. The trained
+      SDPO checkpoint (1.023) surpasses the Karpathy agent (0.970, &minus;2.8%) from a 14B open-source model.
     </p>
     <p>
       The gap between single-turn and ICL measures what context contributes (nothing &mdash; single-turn
@@ -727,9 +732,11 @@
     <h2>Why SDPO Outperforms GRPO</h2>
     <p>
       We ran four complementary analyses on the trained checkpoints to understand <em>how</em> SDPO
-      achieves better results than GRPO. The picture is consistent: SDPO makes targeted, low-rank weight
-      changes that don&rsquo;t alter internal activation geometry but meaningfully shift what the model
-      predicts. GRPO&rsquo;s KL constraint keeps it too close to the base distribution to learn much.
+      (&minus;3.1% in ~137M tokens, 16 rollouts/step) achieves better results than our GRPO run
+      (&minus;1.8% in ~94M tokens, 128 rollouts/step with KL penalty and batch-normalized advantages).
+      The picture is consistent: SDPO makes targeted, low-rank weight changes that don&rsquo;t alter
+      internal activation geometry but meaningfully shift what the model predicts. Our GRPO checkpoint,
+      even with 8&times; more rollouts per step, shows minimal functional divergence from the base model.
     </p>
 
     <h3>1. Weight Delta SVD</h3>
@@ -758,10 +765,11 @@
     </div>
 
     <p>
-      SDPO makes changes that are <strong>4&times; larger in magnitude but concentrated in fewer dimensions</strong>
-      (effective rank 863 vs 1346). Its top-5 singular values capture 13.9% of total variance vs GRPO&rsquo;s 8.7%.
-      This is the signature of targeted skill acquisition &mdash; learning specific computational patterns &mdash;
-      vs GRPO&rsquo;s diffuse distribution sharpening across many directions at once.
+      SDPO&rsquo;s weight deltas are <strong>4&times; larger in magnitude but concentrated in fewer dimensions</strong>
+      (effective rank 863 vs 1346). Its top-5 singular values capture 13.9% of total variance vs 8.7% for GRPO.
+      SDPO learned specific computational patterns in a few targeted directions, while our GRPO run spread
+      smaller changes diffusely across many dimensions &mdash; consistent with the KL penalty and batch
+      normalization constraining updates to stay near the base distribution.
     </p>
 
     <h3>2. Forgetting Probes</h3>
@@ -813,8 +821,9 @@
     <p>
       SDPO achieves a favorable learning-forgetting trade-off: it <strong>improves GSM8K by +1.21%</strong>
       and WikiText perplexity by &minus;0.1 &mdash; genuine capability gains on generative tasks &mdash; while
-      preserving MMLU and accepting only mild MC benchmark degradation. GRPO&rsquo;s KL constraint (coefficient
-      1e-5) effectively freezes the distribution, preventing both forgetting <em>and</em> learning.
+      preserving MMLU and accepting only mild MC benchmark degradation. Our GRPO run, with the KL penalty
+      (coefficient 1e-5) we added to stabilize training, barely moves from the base distribution &mdash;
+      KL divergence of just 0.0007 vs SDPO&rsquo;s 0.0017.
     </p>
 
     <h3>3. Activation Similarity</h3>
@@ -893,8 +902,10 @@
       <strong>don&rsquo;t alter activation geometry</strong> (cosine similarity &gt; 0.999) but
       <strong>meaningfully shift predictions</strong> (1.6&times; more tokens changed, higher entropy) in a way
       that <strong>improves generative capabilities</strong> (GSM8K +1.21%, WikiText &minus;0.1) without
-      degrading knowledge (MMLU +0.02%). GRPO&rsquo;s KL penalty keeps it too close to base to learn &mdash;
-      its changes are diffuse, tiny, and functionally invisible.
+      degrading knowledge (MMLU +0.02%). Our GRPO run &mdash; which required adding a KL penalty and batch
+      normalization just to produce stable training &mdash; made changes too small and diffuse to show up
+      in any of these analyses. The 8&times; rollout advantage (128 vs 16 per step) didn&rsquo;t compensate
+      for the constrained update magnitude.
     </p>
     <p style="font-size: 0.88em; color: var(--text-secondary);">
       Full analysis code and results: <a href="https://github.com/SilenNaihin/autoresearch-distillation/tree/main/scripts/interp"><code>scripts/interp/</code></a>
@@ -999,8 +1010,9 @@
     <p class="footnote">
       <sup>*</sup> Absolute baselines differ (Karpathy: 0.998, ours: 1.056) due to platform/setup
       differences. Relative improvements are compared. Claude Haiku single has high variance
-      (19/50 turns succeeded, avg 1.070). GRPO uses group_size=8 (128 rollouts/step, ~94M tokens)
-      vs SDPO&rsquo;s 16 rollouts/step (~137M tokens).
+      (19/50 turns succeeded, avg 1.070). Our GRPO run uses group_size=8 (128 rollouts/step, ~94M tokens)
+      with a KL penalty and batch-normalized advantages added to stabilize training;
+      SDPO uses 16 rollouts/step (~137M tokens).
     </p>
   </section>
 
