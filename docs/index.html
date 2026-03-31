@@ -526,20 +526,47 @@
       even when all rollouts fail.
       Over 495 steps, SDPO entropy <em>increases</em> (0.28&rarr;0.61) &mdash; no mode collapse &mdash;
       while pg_loss steadily decreases (0.052&rarr;0.011), indicating continued learning.
-      Weight updates encode exploration patterns that compound across training &mdash; increasing effective
-      memory and feedback adherence in comparison to context-bounded approaches (such as ICL and memory systems).
+    </p>
+    <p>
+      SDPO is extremely sensitive to its training dynamics. We identified two failure modes that required
+      active management. <strong>Entropy collapse</strong> kills exploration: the model locks into a narrow
+      set of edits and stops trying new things. We addressed this with lower learning rate and entropy
+      regularization. <strong>Teacher collapse</strong> kills the learning signal: when the EMA teacher
+      becomes too similar to the student, pg_loss heads toward zero and the distributional mismatch that
+      SDPO relies on vanishes. We fixed this by setting EMA&nbsp;&tau;&nbsp;=&nbsp;0 (effectively freezing
+      the teacher as the base model), after which we observed healthy entropy and pg_loss throughout training.
+      The teacher-student gap must remain alive, or SDPO loses its reason to exist.
+    </p>
+    <p>
+      Environment and feedback design mattered as much as the algorithm itself. We added
+      <strong>hash-based deduplication</strong> with a novelty reward: if a proposed diff was previously
+      unseen, the feedback praised it; if it had been tried before, the model was told to try something new.
+      We also built an <strong>experiment cache</strong> that cut iteration time from ~20 minutes to ~5 minutes
+      per step &mdash; a 4&times; throughput improvement that, in a search-limited regime, mattered as much
+      as any algorithmic change. Despite these measures, novelty rate (cache miss rate) fell to ~10% by
+      step 100, suggesting the search process exhausts diversity early even when losses still look healthy.
     </p>
 
     <h3>GRPO <span class="pill pill-rl">RL</span></h3>
     <p>
       Group Relative Policy Optimization uses reward differences <em>within</em> a group as the learning
-      signal. Our initial GRPO runs showed no return signal at all, so we added a KL penalty term
-      (coefficient 1e-5) and batch normalization on the advantages to stabilize training. We also
-      bumped the group size to 8 (128 rollouts/step vs SDPO&rsquo;s 16) to give GRPO more signal
-      per step. Over 38 steps (~94M tokens), our GRPO run reaches
-      <strong>val_bpb&nbsp;=&nbsp;1.037</strong> (&minus;1.8%) with entropy stable at ~0.30 but
-      no continued improvement. SDPO achieves &minus;3.1% in ~137M tokens &mdash; better results from
-      only 1.5&times; more tokens, with entropy <em>increasing</em> (0.28&rarr;0.61).
+      signal. Our initial GRPO runs showed no return signal at all, so we made three changes: dropped the
+      learning rate from 5e-6 to 1e-6 to reduce destructive updates in a sparse-reward setting, added a KL
+      penalty (coefficient 1e-3) to prevent drift and collapse, and bumped the group size to 8 (128
+      rollouts/step vs SDPO&rsquo;s 16) to increase the chance of seeing useful reward differences per step.
+    </p>
+    <p>
+      Over 38 steps (~94M tokens), our GRPO run reaches <strong>val_bpb&nbsp;=&nbsp;1.037</strong>
+      (&minus;1.8%) with entropy stable at ~0.30 but no continued improvement. A telling diagnostic:
+      the KL term dominated pg_loss by 3&ndash;4 orders of magnitude, and gradient norms were very small.
+      This suggests GRPO was operating more as &ldquo;stay near base + better search&rdquo; than as strong
+      policy learning away from initialization.
+    </p>
+    <p>
+      Notably, once we added <strong>MCTS</strong> for structured proposal search, GRPO improved significantly
+      and beat SDPO on best reward. This complicates the SDPO-vs-GRPO comparison: the improvement came primarily
+      from better search scaffolding, not from richer GRPO learning dynamics. It suggests that on this task,
+      <strong>proposal quality and search structure may matter more than the RL algorithm</strong>.
     </p>
 
     <h3>ICL Baseline <span class="pill pill-icl">In-Context</span></h3>
@@ -619,6 +646,39 @@
       The best result is a compound edit: the model learned to combine architecture changes
       (more depth, smaller aspect ratio, halved batch size) with learning rate tuning &mdash;
       a multi-parameter optimization that only emerged after extended training.
+    </p>
+
+    <h3>Best single-turn result (Claude Haiku, &minus;4.4%)</h3>
+    <p>
+      The strongest single result across all methods came from Claude Haiku 4.5 on turn 42 of 50
+      independent single-shot attempts (no feedback, no history). The edit follows the same core
+      insight &mdash; trade model size for throughput &mdash; but arrives at it in one shot:
+    </p>
+
+    <div class="diff-block"><span class="meta">--- a/train.py
++++ b/train.py</span>
+<span class="del">-TOTAL_BATCH_SIZE = 2**19  # ~524K tokens</span>
+<span class="add">+TOTAL_BATCH_SIZE = 2**17  # ~131K tokens</span>
+<span class="del">-EMBEDDING_LR = 0.6</span>
+<span class="add">+EMBEDDING_LR = 0.4</span>
+<span class="del">-MATRIX_LR = 0.04</span>
+<span class="add">+MATRIX_LR = 0.03</span>
+<span class="del">-WARMDOWN_RATIO = 0.5</span>
+<span class="add">+WARMDOWN_RATIO = 0.3</span>
+<span class="del">-FINAL_LR_FRAC = 0.0</span>
+<span class="add">+FINAL_LR_FRAC = 0.05</span>
+<span class="del">-DEPTH = 8</span>
+<span class="add">+DEPTH = 10</span>
+<span class="del">-DEVICE_BATCH_SIZE = 128</span>
+<span class="add">+DEVICE_BATCH_SIZE = 64</span></div>
+
+    <p style="font-size: 0.88em; color: var(--text-secondary);">
+      Result: <strong>val_bpb&nbsp;=&nbsp;1.009</strong> (&minus;4.4%), completing 1,580 training steps
+      vs 591 at default settings. Smaller batch (131K&nbsp;&rarr;&nbsp;4&times; more steps), more depth
+      (10 layers), halved device batch, lower learning rates, and a nonzero final LR fraction.
+      The same throughput-over-parameters pattern discovered independently by every method &mdash;
+      but Haiku only succeeded on 19 of 50 attempts (avg&nbsp;1.070), making this a high-variance outlier
+      rather than a reliable strategy.
     </p>
 
     <h3>Learned intuition through weight updates</h3>
@@ -1022,14 +1082,31 @@
   <section>
     <h2>Limitations & Future Work</h2>
     <p>
-      Our current approach depends on the base capabilities of a Qwen3 14B model in generating
-      novel modifications to research code. We expect the performance of this approach to improve
-      with the size of the model and with additional tools (e.g., web search to read research papers). 
-      Another challenge is encouraging the model to combine single edits that reduce validation loss. 
-      Finally, although we believe references to previous experiments in chain-of-thought
-      serve as a means of improving reasoning quality, we notice the model tends to conflate
-      feedback from different rollouts. We suspect this is due to using a batch size greater
-      than one with the same prompt and varying teacher hindsight context.
+      <strong>Teacher model bias at small scale.</strong> SDPO&rsquo;s teacher is the same model conditioned
+      on hindsight feedback. At 14B, this creates a ceiling: the teacher can only &ldquo;correct&rdquo; the
+      student toward solutions the base model could already express when given the right context. The
+      teacher-student gap that drives SDPO&rsquo;s learning signal is bounded by the base model&rsquo;s own
+      capabilities, which may explain why SDPO improved average behavior more than it discovered qualitatively
+      new solutions. Larger base models or external teacher models (e.g., using a stronger model to generate
+      feedback) could widen this ceiling.
+    </p>
+    <p>
+      <strong>Compound edits.</strong> Encouraging the model to combine multiple single edits that
+      individually reduce validation loss remains a challenge. The best SDPO result is a compound edit,
+      but these emerged rarely and late in training.
+    </p>
+    <p>
+      <strong>Rollout conflation.</strong> Although references to previous experiments in chain-of-thought
+      serve as a means of improving reasoning quality, the model tends to conflate feedback from different
+      rollouts. We suspect this is due to using a batch size greater than one with the same prompt and
+      varying teacher hindsight context.
+    </p>
+    <p>
+      <strong>Search exhaustion.</strong> Novelty rate collapsed to ~10% by step 100 despite explicit
+      novelty rewards and hash-based deduplication. The model cycles through a limited repertoire of
+      edits rather than discovering genuinely new regions of the solution space. Improving proposal
+      diversity &mdash; through better prompting, tool use, or external search &mdash; may matter more
+      than further algorithmic improvements.
     </p>
   </section>
 
