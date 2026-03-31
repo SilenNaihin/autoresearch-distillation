@@ -1,0 +1,332 @@
+{
+  "grpo": {
+    "per_layer": {
+      "0": {
+        "top1_agreement": 0.9928717613220215,
+        "base_entropy": 4.970938682556152,
+        "ft_entropy": 4.971503257751465,
+        "entropy_delta": 0.0005651272367686033,
+        "n_tokens": 71967
+      },
+      "2": {
+        "top1_agreement": 0.9862992763519287,
+        "base_entropy": 4.518060207366943,
+        "ft_entropy": 4.51887321472168,
+        "entropy_delta": 0.000812733022030443,
+        "n_tokens": 71967
+      },
+      "4": {
+        "top1_agreement": 0.9825336337089539,
+        "base_entropy": 4.392783164978027,
+        "ft_entropy": 4.393832206726074,
+        "entropy_delta": 0.0010486498940736055,
+        "n_tokens": 71967
+      },
+      "6": {
+        "top1_agreement": 0.9806994795799255,
+        "base_entropy": 4.92049503326416,
+        "ft_entropy": 4.92210054397583,
+        "entropy_delta": 0.0016058655455708504,
+        "n_tokens": 71967
+      },
+      "8": {
+        "top1_agreement": 0.9767254590988159,
+        "base_entropy": 7.64122200012207,
+        "ft_entropy": 7.641748905181885,
+        "entropy_delta": 0.0005281931953504682,
+        "n_tokens": 71967
+      },
+      "10": {
+        "top1_agreement": 0.9745160937309265,
+        "base_entropy": 7.8760786056518555,
+        "ft_entropy": 7.875777244567871,
+        "entropy_delta": -0.0003010116924997419,
+        "n_tokens": 71967
+      },
+      "12": {
+        "top1_agreement": 0.9734878540039062,
+        "base_entropy": 7.274799346923828,
+        "ft_entropy": 7.27463960647583,
+        "entropy_delta": -0.00015901595179457217,
+        "n_tokens": 71967
+      },
+      "14": {
+        "top1_agreement": 0.972848653793335,
+        "base_entropy": 7.1257781982421875,
+        "ft_entropy": 7.125155448913574,
+        "entropy_delta": -0.0006226949044503272,
+        "n_tokens": 71967
+      },
+      "16": {
+        "top1_agreement": 0.9719871878623962,
+        "base_entropy": 7.04881477355957,
+        "ft_entropy": 7.048792362213135,
+        "entropy_delta": -2.2491720301331952e-05,
+        "n_tokens": 71967
+      },
+      "18": {
+        "top1_agreement": 0.9741687178611755,
+        "base_entropy": 6.211981773376465,
+        "ft_entropy": 6.213027477264404,
+        "entropy_delta": 0.0010452892165631056,
+        "n_tokens": 71967
+      },
+      "20": {
+        "top1_agreement": 0.9745299816131592,
+        "base_entropy": 6.122459888458252,
+        "ft_entropy": 6.124148845672607,
+        "entropy_delta": 0.0016887851525098085,
+        "n_tokens": 71967
+      },
+      "22": {
+        "top1_agreement": 0.9733210802078247,
+        "base_entropy": 5.76888370513916,
+        "ft_entropy": 5.770168304443359,
+        "entropy_delta": 0.0012845463352277875,
+        "n_tokens": 71967
+      },
+      "24": {
+        "top1_agreement": 0.9746411442756653,
+        "base_entropy": 5.3549394607543945,
+        "ft_entropy": 5.355249404907227,
+        "entropy_delta": 0.0003098695888184011,
+        "n_tokens": 71967
+      },
+      "26": {
+        "top1_agreement": 0.9754331707954407,
+        "base_entropy": 4.718481063842773,
+        "ft_entropy": 4.718179225921631,
+        "entropy_delta": -0.00030136763234622777,
+        "n_tokens": 71967
+      },
+      "28": {
+        "top1_agreement": 0.9761974215507507,
+        "base_entropy": 3.740044116973877,
+        "ft_entropy": 3.740262508392334,
+        "entropy_delta": 0.0002181401359848678,
+        "n_tokens": 71967
+      },
+      "30": {
+        "top1_agreement": 0.977920413017273,
+        "base_entropy": 2.723395824432373,
+        "ft_entropy": 2.7237508296966553,
+        "entropy_delta": 0.0003552441776264459,
+        "n_tokens": 71967
+      },
+      "32": {
+        "top1_agreement": 0.9797824025154114,
+        "base_entropy": 2.1568491458892822,
+        "ft_entropy": 2.1569509506225586,
+        "entropy_delta": 0.00010135101183550432,
+        "n_tokens": 71967
+      },
+      "34": {
+        "top1_agreement": 0.9814081192016602,
+        "base_entropy": 1.7231316566467285,
+        "ft_entropy": 1.7230606079101562,
+        "entropy_delta": -7.114196341717616e-05,
+        "n_tokens": 71967
+      },
+      "36": {
+        "top1_agreement": 0.983020007610321,
+        "base_entropy": 1.2450014352798462,
+        "ft_entropy": 1.2454092502593994,
+        "entropy_delta": 0.00040791742503643036,
+        "n_tokens": 71967
+      },
+      "38": {
+        "top1_agreement": 0.9901065826416016,
+        "base_entropy": 1.114526629447937,
+        "ft_entropy": 1.1146855354309082,
+        "entropy_delta": 0.00015877062105573714,
+        "n_tokens": 71967
+      },
+      "39": {
+        "top1_agreement": 0.98843914270401,
+        "base_entropy": 1.2167584896087646,
+        "ft_entropy": 1.2167723178863525,
+        "entropy_delta": 1.3886644410376903e-05,
+        "n_tokens": 71967
+      }
+    },
+    "per_domain_per_layer": {}
+  },
+  "sdpo": {
+    "per_layer": {
+      "0": {
+        "top1_agreement": 0.9841455221176147,
+        "base_entropy": 4.970938682556152,
+        "ft_entropy": 4.978374481201172,
+        "entropy_delta": 0.007436054293066263,
+        "n_tokens": 71967
+      },
+      "2": {
+        "top1_agreement": 0.9793655276298523,
+        "base_entropy": 4.518060207366943,
+        "ft_entropy": 4.527311325073242,
+        "entropy_delta": 0.009250719100236893,
+        "n_tokens": 71967
+      },
+      "4": {
+        "top1_agreement": 0.9774618744850159,
+        "base_entropy": 4.392783164978027,
+        "ft_entropy": 4.39859676361084,
+        "entropy_delta": 0.005813324823975563,
+        "n_tokens": 71967
+      },
+      "6": {
+        "top1_agreement": 0.9728903770446777,
+        "base_entropy": 4.92049503326416,
+        "ft_entropy": 4.904094696044922,
+        "entropy_delta": -0.01640050858259201,
+        "n_tokens": 71967
+      },
+      "8": {
+        "top1_agreement": 0.9665263295173645,
+        "base_entropy": 7.64122200012207,
+        "ft_entropy": 7.640223979949951,
+        "entropy_delta": -0.0009969300590455532,
+        "n_tokens": 71967
+      },
+      "10": {
+        "top1_agreement": 0.9646921753883362,
+        "base_entropy": 7.8760786056518555,
+        "ft_entropy": 7.881022930145264,
+        "entropy_delta": 0.004944245330989361,
+        "n_tokens": 71967
+      },
+      "12": {
+        "top1_agreement": 0.9633859992027283,
+        "base_entropy": 7.274799346923828,
+        "ft_entropy": 7.281399726867676,
+        "entropy_delta": 0.006600844208151102,
+        "n_tokens": 71967
+      },
+      "14": {
+        "top1_agreement": 0.9636222124099731,
+        "base_entropy": 7.1257781982421875,
+        "ft_entropy": 7.132864475250244,
+        "entropy_delta": 0.007086081430315971,
+        "n_tokens": 71967
+      },
+      "16": {
+        "top1_agreement": 0.963552713394165,
+        "base_entropy": 7.04881477355957,
+        "ft_entropy": 7.056473255157471,
+        "entropy_delta": 0.00765805272385478,
+        "n_tokens": 71967
+      },
+      "18": {
+        "top1_agreement": 0.9663317799568176,
+        "base_entropy": 6.211981773376465,
+        "ft_entropy": 6.215616226196289,
+        "entropy_delta": 0.0036344570107758045,
+        "n_tokens": 71967
+      },
+      "20": {
+        "top1_agreement": 0.9672349691390991,
+        "base_entropy": 6.122459888458252,
+        "ft_entropy": 6.130070209503174,
+        "entropy_delta": 0.0076096379198133945,
+        "n_tokens": 71967
+      },
+      "22": {
+        "top1_agreement": 0.9651784896850586,
+        "base_entropy": 5.76888370513916,
+        "ft_entropy": 5.77764368057251,
+        "entropy_delta": 0.008760383352637291,
+        "n_tokens": 71967
+      },
+      "24": {
+        "top1_agreement": 0.9660955667495728,
+        "base_entropy": 5.3549394607543945,
+        "ft_entropy": 5.365466117858887,
+        "entropy_delta": 0.010526279918849468,
+        "n_tokens": 71967
+      },
+      "26": {
+        "top1_agreement": 0.965581476688385,
+        "base_entropy": 4.718481063842773,
+        "ft_entropy": 4.7319655418396,
+        "entropy_delta": 0.013485042378306389,
+        "n_tokens": 71967
+      },
+      "28": {
+        "top1_agreement": 0.9659844040870667,
+        "base_entropy": 3.740044116973877,
+        "ft_entropy": 3.751197576522827,
+        "entropy_delta": 0.011153465136885643,
+        "n_tokens": 71967
+      },
+      "30": {
+        "top1_agreement": 0.9679297208786011,
+        "base_entropy": 2.723395824432373,
+        "ft_entropy": 2.729410409927368,
+        "entropy_delta": 0.006014743819832802,
+        "n_tokens": 71967
+      },
+      "32": {
+        "top1_agreement": 0.9693748354911804,
+        "base_entropy": 2.1568491458892822,
+        "ft_entropy": 2.1660518646240234,
+        "entropy_delta": 0.009202581830322742,
+        "n_tokens": 71967
+      },
+      "34": {
+        "top1_agreement": 0.9727792143821716,
+        "base_entropy": 1.7231316566467285,
+        "ft_entropy": 1.7312222719192505,
+        "entropy_delta": 0.00809047557413578,
+        "n_tokens": 71967
+      },
+      "36": {
+        "top1_agreement": 0.9753358960151672,
+        "base_entropy": 1.2450014352798462,
+        "ft_entropy": 1.2523099184036255,
+        "entropy_delta": 0.007308482192456722,
+        "n_tokens": 71967
+      },
+      "38": {
+        "top1_agreement": 0.9845623970031738,
+        "base_entropy": 1.114526629447937,
+        "ft_entropy": 1.1201856136322021,
+        "entropy_delta": 0.005658912006765604,
+        "n_tokens": 71967
+      },
+      "39": {
+        "top1_agreement": 0.9811997413635254,
+        "base_entropy": 1.2167584896087646,
+        "ft_entropy": 1.2336540222167969,
+        "entropy_delta": 0.016895517706871033,
+        "n_tokens": 71967
+      }
+    },
+    "per_domain_per_layer": {}
+  },
+  "config": {
+    "layers": [
+      0,
+      2,
+      4,
+      6,
+      8,
+      10,
+      12,
+      14,
+      16,
+      18,
+      20,
+      22,
+      24,
+      26,
+      28,
+      30,
+      32,
+      34,
+      36,
+      38,
+      39
+    ],
+    "max_seq_len": 256
+  }
+}

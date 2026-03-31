@@ -179,3 +179,48 @@ CKA and cosine similarity computed on 600 sequences (C4, code, GSM8K, Wikipedia)
 **Outcome: CKA > 0.999 everywhere.** Both models' activations are nearly identical to base. SDPO diverges slightly more (especially at layer 38), consistent with SVD findings, but the absolute shift is too small for cross-coders to meaningfully decompose.
 
 **Decision: Pivot to logit lens analysis.** The weight changes modify what the model *outputs* (demonstrated by GSM8K +1.21%, WikiText PPL -0.1) without meaningfully changing internal activation geometry. Logit lens will show how output predictions evolve through the layers and where GRPO vs SDPO diverge from base in prediction space.
+
+**Note on CKA:** CKA compares Gram matrices (X@X.T vs Y@Y.T), measuring whether pairwise relational structure is preserved — not whether individual activations changed. It's a coarse metric that can show high similarity even when individual vectors have shifted meaningfully. Cosine similarity (per-token, between paired activations) is a more direct measure of activation change. Both metrics agreed here (>0.999), so the conclusion stands, but cosine similarity is the more informative metric for this use case.
+
+---
+
+## Logit Lens Results (Executed)
+
+Since activation geometry barely changed, we pivoted to logit lens: projecting each layer's residual stream through the final LayerNorm + unembedding to see how *predictions* evolve through the network. This captures functional differences even when activations are geometrically similar.
+
+400 sequences (C4, code, GSM8K, Wikipedia), ~72K token positions, every 2nd layer (0,2,...,38) + layer 39.
+
+### Key Results (Final Layer 39)
+
+| Metric | GRPO | SDPO |
+|---|---|---|
+| Top-1 agreement with base | 98.84% | 98.12% |
+| Predictions changed from base | 1.16% | **1.88%** |
+| Entropy delta (nats) | +0.00001 | **+0.0169** |
+
+### Per-Layer Profile
+
+| Layer | GRPO Top1 Agree | SDPO Top1 Agree | GRPO Ent Δ | SDPO Ent Δ |
+|---|---|---|---|---|
+| 0 | 99.29% | 98.41% | +0.0006 | +0.0074 |
+| 10 | 97.45% | 96.47% | -0.0003 | +0.0049 |
+| 16 | 97.20% | 96.36% | -0.0000 | +0.0077 |
+| 24 | 97.46% | 96.61% | +0.0003 | +0.0105 |
+| 30 | 97.79% | 96.79% | +0.0004 | +0.0060 |
+| 38 | 99.01% | 98.46% | +0.0002 | +0.0057 |
+| 39 | 98.84% | 98.12% | +0.0000 | +0.0169 |
+
+### Interpretation
+
+**SDPO changes 1.6x more predictions than GRPO** (1.88% vs 1.16% at final layer). The divergence is consistent across all layers, not concentrated in any particular depth — suggesting a distributed functional shift rather than a single circuit being modified.
+
+**SDPO consistently increases entropy** (+0.017 nats at final layer vs ~0 for GRPO). This means SDPO spreads probability mass more broadly — it's not just sharpening the base model's existing predictions, but exploring a wider prediction space. This is consistent with the hypothesis that SDPO learns genuinely new structure rather than just reinforcing existing patterns.
+
+**Both models converge toward base at the final layers** (agreement rises from ~97% at mid-layers to ~99% at layer 38-39). This U-shaped pattern suggests the changes are primarily in intermediate processing, with the final layers partially compensating — consistent with the model learning new intermediate representations that map back onto a similar (but not identical) output space.
+
+**GRPO's prediction entropy is essentially unchanged** (delta < 0.002 at all layers). Combined with its 0.0007 KL divergence and near-zero behavioral changes, this confirms GRPO barely modifies the model's computation. The KL constraint (1e-5) effectively freezes the distribution.
+
+### Data
+
+- Script: `scripts/interp/logit_lens.py`
+- Results: `outputs/forgetting_probes_v2/logit_lens.json`
