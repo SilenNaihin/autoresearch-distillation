@@ -1,0 +1,502 @@
+👋 This is mini-swe-agent version 2.2.6.
+Check the v2 migration guide at https://klieret.short.gy/mini-v2-migration
+Loading global config from '/Users/silen/Library/Application 
+Support/mini-swe-agent/.env'
+wandb: Currently logged in as: silennai (silennai-endflow) to https://api.wandb.ai. Use `wandb login --relogin` to force relogin
+wandb: Tracking run with wandb version 0.23.1
+wandb: Run data is saved locally in /Users/silen/Desktop/Projects/autoresearch-distillation/wandb/run-20260323_110332-twubtfd6
+wandb: Run `wandb offline` to turn off syncing.
+wandb: Syncing run claude-haiku-single-agent-v1
+wandb: ⭐️ View project at https://wandb.ai/silennai-endflow/autoresearch-baseline
+wandb: 🚀 View run at https://wandb.ai/silennai-endflow/autoresearch-baseline/runs/twubtfd6
+wandb: Detected [litellm, openai] in use.
+wandb: Use W&B Weave for improved LLM call tracing. Weave is installed but not imported. Add `import weave` to the top of your script.
+wandb: For more information, check out the docs at: https://weave-docs.wandb.ai/
+Model:       bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0
+Mode:        agent
+Max turns:   50
+Temperature: 1.0
+Single-turn: True
+Step limit:  10
+VERL compat: False
+Fleet:       ['h100-dev-box-2-gpu0']
+Output:      outputs/baseline/claude-haiku-single-agent-v1-1774289011.jsonl
+
+Experiment cache: 1694 entries loaded from disk
+
+============================================================
+Turn 0/50
+============================================================
+  Tool calls: 0  Sed: 7
+  Diff size:  689 chars
+  Gen time:   36.0s  Trajectory: 23 msgs
+  Dispatching experiment to h100-dev-box-2-gpu0...
+  val_bpb=1.083492  best=inf  reward=0.0000  status=no_improvement  time=378s
+
+============================================================
+Turn 1/50
+============================================================
+  Tool calls: 0  Sed: 10
+  Diff size:  12 chars
+  Gen time:   39.0s  Trajectory: 23 msgs
+  Status: no_changes
+
+============================================================
+Turn 2/50
+============================================================
+  Tool calls: 0  Sed: 10
+  Diff size:  12 chars
+  Gen time:   92.1s  Trajectory: 23 msgs
+  Status: no_changes
+
+============================================================
+Turn 3/50
+============================================================
+  Tool calls: 0  Sed: 7
+  Diff size:  1472 chars
+  Gen time:   38.6s  Trajectory: 23 msgs
+  Dispatching experiment to h100-dev-box-2-gpu0...
+  Status: crash — assertion failed (batch size / config mismatch)
+
+============================================================
+Turn 4/50
+============================================================
+  Tool calls: 0  Sed: 7
+  Diff size:  1175 chars
+  Gen time:   35.0s  Trajectory: 23 msgs
+  Dispatching experiment to h100-dev-box-2-gpu0...
+  val_bpb=1.046873  best=1.046873  reward=0.0091  status=improvement  time=366s
+
+============================================================
+Turn 5/50
+============================================================
+  Tool calls: 0  Sed: 7
+  Diff size:  1493 chars
+  Gen time:   31.4s  Trajectory: 23 msgs
+  Dispatching experiment to h100-dev-box-2-gpu0...
+  Status: crash — assertion failed (batch size / config mismatch)
+
+============================================================
+Turn 6/50
+============================================================
+  Tool calls: 0  Sed: 19
+  Diff size:  1230 chars
+  Gen time:   33.1s  Trajectory: 23 msgs
+  Dispatching experiment to h100-dev-box-2-gpu0...
+  val_bpb=1.085191  best=1.046873  reward=0.0000  status=no_improvement  time=374s
+
+============================================================
+Turn 7/50
+============================================================
+  Tool calls: 0  Sed: 7
+  Diff size:  1350 chars
+  Gen time:   30.0s  Trajectory: 23 msgs
+  Dispatching experiment to h100-dev-box-2-gpu0...
+  Status: crash — assertion failed (batch size / config mismatch)
+
+============================================================
+Turn 8/50
+============================================================
+  Tool calls: 0  Sed: 4
+  Diff size:  1488 chars
+  Gen time:   37.8s  Trajectory: 23 msgs
+  Dispatching experiment to h100-dev-box-2-gpu0...
+  Status: crash — 0 GiB. GPU 0 has a total capacity of 93.12 GiB of which 5.31 GiB is free. Including non-PyTorch memory, this process has
+
+============================================================
+Turn 9/50
+============================================================
+  Tool calls: 0  Sed: 10
+  Diff size:  12 chars
+  Gen time:   27.5s  Trajectory: 23 msgs
+  Status: no_changes
+
+============================================================
+Turn 10/50
+============================================================
+  Tool calls: 0  Sed: 16
+  Diff size:  936 chars
+  Gen time:   30.2s  Trajectory: 23 msgs
+  Dispatching experiment to h100-dev-box-2-gpu0...
+  Status: crash — assertion failed (batch size / config mismatch)
+
+============================================================
+Turn 11/50
+============================================================
+  Tool calls: 0  Sed: 10
+  Diff size:  461 chars
+  Gen time:   27.6s  Trajectory: 23 msgs
+  Dispatching experiment to h100-dev-box-2-gpu0...
+  val_bpb=1.065965  best=1.046873  reward=0.0000  status=no_improvement  time=365s
+
+============================================================
+Turn 12/50
+============================================================
+  Tool calls: 0  Sed: 7
+  Diff size:  1057 chars
+  Gen time:   55.0s  Trajectory: 23 msgs
+  Dispatching experiment to h100-dev-box-2-gpu0...
+  val_bpb=1.075452  best=1.046873  reward=0.0000  status=no_improvement  time=397s
+
+============================================================
+Turn 13/50
+============================================================
+  Tool calls: 0  Sed: 4
+  Diff size:  1431 chars
+  Gen time:   33.9s  Trajectory: 23 msgs
+  Dispatching experiment to h100-dev-box-2-gpu0...
+  Status: crash — assertion failed (batch size / config mismatch)
+
+============================================================
+Turn 14/50
+============================================================
+  Tool calls: 0  Sed: 4
+  Diff size:  12 chars
+  Gen time:   54.6s  Trajectory: 23 msgs
+  Status: no_changes
+
+============================================================
+Turn 15/50
+============================================================
+  Tool calls: 0  Sed: 16
+  Diff size:  501 chars
+  Gen time:   101.8s  Trajectory: 23 msgs
+  Dispatching experiment to h100-dev-box-2-gpu0...
+  Status: crash — assertion failed (batch size / config mismatch)
+
+============================================================
+Turn 16/50
+============================================================
+  Tool calls: 0  Sed: 7
+  Diff size:  1675 chars
+  Gen time:   30.1s  Trajectory: 23 msgs
+  Dispatching experiment to h100-dev-box-2-gpu0...
+  val_bpb=1.041899  best=1.041899  reward=0.0141  status=improvement  time=369s
+
+============================================================
+Turn 17/50
+============================================================
+  Tool calls: 0  Sed: 13
+  Diff size:  882 chars
+  Gen time:   41.3s  Trajectory: 23 msgs
+  Dispatching experiment to h100-dev-box-2-gpu0...
+  Status: crash — assertion failed (batch size / config mismatch)
+
+============================================================
+Turn 18/50
+============================================================
+  Tool calls: 0  Sed: 16
+  Diff size:  831 chars
+  Gen time:   25.9s  Trajectory: 23 msgs
+  Dispatching experiment to h100-dev-box-2-gpu0...
+  Status: crash — assertion failed (batch size / config mismatch)
+
+============================================================
+Turn 19/50
+============================================================
+  Tool calls: 0  Sed: 7
+  Diff size:  1680 chars
+  Gen time:   30.8s  Trajectory: 23 msgs
+  Dispatching experiment to h100-dev-box-2-gpu0...
+  Status: crash — assertion failed (batch size / config mismatch)
+
+============================================================
+Turn 20/50
+============================================================
+  Tool calls: 0  Sed: 4
+  Diff size:  12 chars
+  Gen time:   53.9s  Trajectory: 23 msgs
+  Status: no_changes
+
+============================================================
+Turn 21/50
+============================================================
+  Tool calls: 0  Sed: 13
+  Diff size:  384 chars
+  Gen time:   32.1s  Trajectory: 23 msgs
+  Dispatching experiment to h100-dev-box-2-gpu0...
+  val_bpb=1.071410  best=1.041899  reward=0.0000  status=no_improvement  time=377s
+
+============================================================
+Turn 22/50
+============================================================
+  Tool calls: 0  Sed: 25
+  Diff size:  1221 chars
+  Gen time:   96.5s  Trajectory: 23 msgs
+  Dispatching experiment to h100-dev-box-2-gpu0...
+  Status: crash — assertion failed (batch size / config mismatch)
+
+============================================================
+Turn 23/50
+============================================================
+  Tool calls: 0  Sed: 19
+  Diff size:  12 chars
+  Gen time:   37.9s  Trajectory: 23 msgs
+  Status: no_changes
+
+============================================================
+Turn 24/50
+============================================================
+  Tool calls: 0  Sed: 4
+  Diff size:  1234 chars
+  Gen time:   52.6s  Trajectory: 23 msgs
+  Dispatching experiment to h100-dev-box-2-gpu0...
+  val_bpb=1.079615  best=1.041899  reward=0.0000  status=no_improvement  time=393s
+
+============================================================
+Turn 25/50
+============================================================
+  Tool calls: 0  Sed: 7
+  Diff size:  1310 chars
+  Gen time:   29.7s  Trajectory: 23 msgs
+  Dispatching experiment to h100-dev-box-2-gpu0...
+  val_bpb=1.016901  best=1.016901  reward=0.0391  status=improvement  time=368s
+
+============================================================
+Turn 26/50
+============================================================
+  Tool calls: 0  Sed: 7
+  Diff size:  384 chars
+  Gen time:   37.1s  Trajectory: 23 msgs
+  Dispatching experiment to h100-dev-box-2-gpu0...
+  val_bpb=1.079046  best=1.016901  reward=0.0000  status=no_improvement  time=379s
+
+============================================================
+Turn 27/50
+============================================================
+  Tool calls: 0  Sed: 16
+  Diff size:  1110 chars
+  Gen time:   31.9s  Trajectory: 23 msgs
+  Dispatching experiment to h100-dev-box-2-gpu0...
+  Status: crash — assertion failed (batch size / config mismatch)
+
+============================================================
+Turn 28/50
+============================================================
+  Tool calls: 0  Sed: 16
+  Diff size:  822 chars
+  Gen time:   64.3s  Trajectory: 23 msgs
+  Dispatching experiment to h100-dev-box-2-gpu0...
+  Status: crash — assertion failed (batch size / config mismatch)
+
+============================================================
+Turn 29/50
+============================================================
+  Tool calls: 0  Sed: 1
+  Diff size:  12 chars
+  Gen time:   48.7s  Trajectory: 23 msgs
+  Status: no_changes
+
+============================================================
+Turn 30/50
+============================================================
+  Tool calls: 0  Sed: 10
+  Diff size:  1427 chars
+  Gen time:   37.6s  Trajectory: 23 msgs
+  Dispatching experiment to h100-dev-box-2-gpu0...
+  val_bpb=1.115686  best=1.016901  reward=0.0000  status=no_improvement  time=401s
+
+============================================================
+Turn 31/50
+============================================================
+  Tool calls: 0  Sed: 25
+  Diff size:  12 chars
+  Gen time:   60.8s  Trajectory: 23 msgs
+  Status: no_changes
+
+============================================================
+Turn 32/50
+============================================================
+  Tool calls: 0  Sed: 13
+  Diff size:  1291 chars
+  Gen time:   32.7s  Trajectory: 23 msgs
+  Dispatching experiment to h100-dev-box-2-gpu0...
+  Status: crash — assertion failed (batch size / config mismatch)
+
+============================================================
+Turn 33/50
+============================================================
+  Tool calls: 0  Sed: 7
+  Diff size:  12 chars
+  Gen time:   53.1s  Trajectory: 23 msgs
+  Status: no_changes
+
+============================================================
+Turn 34/50
+============================================================
+  Tool calls: 0  Sed: 37
+  Diff size:  1430 chars
+  Gen time:   31.5s  Trajectory: 23 msgs
+  Dispatching experiment to h100-dev-box-2-gpu0...
+  Status: crash — assertion failed (batch size / config mismatch)
+
+============================================================
+Turn 35/50
+============================================================
+  Tool calls: 0  Sed: 7
+  Diff size:  12 chars
+  Gen time:   37.6s  Trajectory: 23 msgs
+  Status: no_changes
+
+============================================================
+Turn 36/50
+============================================================
+  Tool calls: 0  Sed: 7
+  Diff size:  1635 chars
+  Gen time:   34.0s  Trajectory: 23 msgs
+  Dispatching experiment to h100-dev-box-2-gpu0...
+  val_bpb=1.107090  best=1.016901  reward=0.0000  status=no_improvement  time=410s
+
+============================================================
+Turn 37/50
+============================================================
+  Tool calls: 0  Sed: 16
+  Diff size:  1070 chars
+  Gen time:   34.9s  Trajectory: 23 msgs
+  Dispatching experiment to h100-dev-box-2-gpu0...
+  Status: crash — assertion failed (batch size / config mismatch)
+
+============================================================
+Turn 38/50
+============================================================
+  Tool calls: 0  Sed: 4
+  Diff size:  12 chars
+  Gen time:   45.8s  Trajectory: 23 msgs
+  Status: no_changes
+
+============================================================
+Turn 39/50
+============================================================
+  Tool calls: 0  Sed: 10
+  Diff size:  1601 chars
+  Gen time:   40.3s  Trajectory: 23 msgs
+  Dispatching experiment to h100-dev-box-2-gpu0...
+  val_bpb=1.070961  best=1.016901  reward=0.0000  status=no_improvement  time=391s
+
+============================================================
+Turn 40/50
+============================================================
+  Tool calls: 0  Sed: 13
+  Diff size:  828 chars
+  Gen time:   33.6s  Trajectory: 23 msgs
+  Dispatching experiment to h100-dev-box-2-gpu0...
+  val_bpb=1.066342  best=1.016901  reward=0.0000  status=no_improvement  time=371s
+
+============================================================
+Turn 41/50
+============================================================
+  Tool calls: 0  Sed: 7
+  Diff size:  1491 chars
+  Gen time:   30.6s  Trajectory: 23 msgs
+  Dispatching experiment to h100-dev-box-2-gpu0...
+  val_bpb=1.057805  best=1.016901  reward=0.0000  status=no_improvement  time=361s
+
+============================================================
+Turn 42/50
+============================================================
+  Tool calls: 0  Sed: 25
+  Diff size:  1484 chars
+  Gen time:   51.2s  Trajectory: 23 msgs
+  Dispatching experiment to h100-dev-box-2-gpu0...
+  val_bpb=1.009495  best=1.009495  reward=0.0465  status=improvement  time=401s
+
+============================================================
+Turn 43/50
+============================================================
+  Tool calls: 0  Sed: 19
+  Diff size:  941 chars
+  Gen time:   27.8s  Trajectory: 23 msgs
+  Dispatching experiment to h100-dev-box-2-gpu0...
+  val_bpb=1.077985  best=1.009495  reward=0.0000  status=no_improvement  time=369s
+
+============================================================
+Turn 44/50
+============================================================
+  Tool calls: 0  Sed: 4
+  Diff size:  1291 chars
+  Gen time:   37.0s  Trajectory: 23 msgs
+  Dispatching experiment to h100-dev-box-2-gpu0...
+  val_bpb=1.075309  best=1.009495  reward=0.0000  status=no_improvement  time=379s
+
+============================================================
+Turn 45/50
+============================================================
+  Tool calls: 0  Sed: 7
+  Diff size:  1369 chars
+  Gen time:   55.0s  Trajectory: 23 msgs
+  Dispatching experiment to h100-dev-box-2-gpu0...
+  Status: crash — 0 GiB. GPU 0 has a total capacity of 93.12 GiB of which 5.31 GiB is free. Including non-PyTorch memory, this process has
+
+============================================================
+Turn 46/50
+============================================================
+  Tool calls: 0  Sed: 13
+  Diff size:  816 chars
+  Gen time:   28.3s  Trajectory: 23 msgs
+  Dispatching experiment to h100-dev-box-2-gpu0...
+  val_bpb=1.098081  best=1.009495  reward=0.0000  status=no_improvement  time=379s
+
+============================================================
+Turn 47/50
+============================================================
+  Tool calls: 0  Sed: 10
+  Diff size:  1384 chars
+  Gen time:   31.6s  Trajectory: 23 msgs
+  Dispatching experiment to h100-dev-box-2-gpu0...
+  Status: crash — assertion failed (batch size / config mismatch)
+
+============================================================
+Turn 48/50
+============================================================
+  Tool calls: 0  Sed: 4
+  Diff size:  1842 chars
+  Gen time:   29.3s  Trajectory: 23 msgs
+wandb: uploading artifact run-twubtfd6-turns_table; uploading media/table/turns_table_50_11db4fd08764740ffd8c.table.json; updating run metadata
+wandb: uploading artifact run-twubtfd6-turns_table; uploading config.yaml
+wandb: uploading artifact run-twubtfd6-turns_table
+wandb: 
+wandb: Run history:
+wandb:           agent_time ▂▂▇▂▂▂▁▂▁▁▄▂▄█▁▁▁▄▂█▃▁▂▂▅▂▄▂▄▂▂▃▂▁▃▂▄▁▂▅
+wandb:         best_val_bpb  ████▇▇▇▂▂▂▂▂▂▂▁▁▁▁
+wandb:   cumulative_crashes ▁▁▁▁▂▂▂▂▃▃▃▃▃▃▄▄▄▄▅▅▅▅▅▅▅▆▆▆▆▇▇▇▇▇▇▇▇▇██
+wandb: cumulative_successes ▁▁▁▁▁▂▂▂▂▂▃▃▃▃▃▃▃▃▃▃▄▅▅▅▅▅▅▅▅▅▅▆▆▆▇█████
+wandb:            diff_size ▄▁▁▇▆▆▇▇▁▃▁▃█▅▄▁▃▆▁▆▃▆▄▁▇▆▁▇▁█▁█▄▇▇▆▇▄▇▁
+wandb:            env/depth █▃█▅█▁▆▆████▃▅▁████
+wandb:      env/mfu_percent ▆▅▆▄▆▂▇▇▆▆▆█▆▆▁▆▆▆▆
+wandb:     env/num_params_M ▆▃▆▃▆▁▅▅▆▆▆█▄▅▁▆▆▆▆
+wandb:        env/num_steps ▂▄▂▂▂▅▂▂▄▂▁▁▃▃▃█▂▂▁
+wandb:     env/peak_vram_mb █▂█▃█▁▇▇██▅▂▄▅▅▁▁▁█
+wandb:                  +14 ...
+wandb: 
+wandb: Run summary:
+wandb:           agent_time 69.09687
+wandb:         best_val_bpb 1.0095
+wandb:   cumulative_crashes 31
+wandb: cumulative_successes 19
+wandb:            diff_size 0
+wandb:            env/depth 10
+wandb:      env/mfu_percent 29.71
+wandb:     env/num_params_M 85.9
+wandb:        env/num_steps 207
+wandb:     env/peak_vram_mb 68078.3
+wandb:                  +18 ...
+wandb: 
+wandb: 🚀 View run claude-haiku-single-agent-v1 at: https://wandb.ai/silennai-endflow/autoresearch-baseline/runs/twubtfd6
+wandb: ⭐️ View project at: https://wandb.ai/silennai-endflow/autoresearch-baseline
+wandb: Synced 5 W&B file(s), 1 media file(s), 2 artifact file(s) and 0 other file(s)
+wandb: Find logs at: ./wandb/run-20260323_110332-twubtfd6/logs
+  Dispatching experiment to h100-dev-box-2-gpu0...
+  Status: crash — assertion failed (batch size / config mismatch)
+
+============================================================
+Turn 49/50
+============================================================
+  Tool calls: 0  Sed: 4
+  Diff size:  12 chars
+  Gen time:   69.1s  Trajectory: 23 msgs
+  Status: no_changes
+
+============================================================
+Baseline complete: 50 turns
+Best val_bpb: 1.009495 (baseline: 1.056)
+Output: outputs/baseline/claude-haiku-single-agent-v1-1774289011.jsonl

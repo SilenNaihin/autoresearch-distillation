@@ -1,0 +1,1 @@
+{"config": {"model": "anthropic.claude-haiku-4-5-20251001-v1:0", "mode": "agent", "max_turns": 50, "temperature": 1.0, "single_turn": false, "seed": 0, "fleet": ["h100_azure-gpu0"], "baseline_val_bpb": 1.056, "method": "agent / ICL"}}
