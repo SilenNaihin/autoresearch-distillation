@@ -101,6 +101,78 @@
     .bar-fill.claude { background: linear-gradient(135deg, #d97706, #f59e0b); }
     .bar-fill.grpo { background: linear-gradient(135deg, #e11d48, #fb7185); }
 
+    /* Analysis comparison bars */
+    .analysis-bar-row {
+      display: grid;
+      grid-template-columns: 100px 1fr 1fr;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 10px;
+      font-size: 0.88em;
+    }
+    .analysis-bar-row .label { text-align: right; font-weight: 500; color: var(--text-secondary); }
+    .analysis-bar-pair { display: flex; gap: 6px; align-items: center; }
+    .analysis-bar-pair .bar-mini {
+      height: 22px;
+      border-radius: 4px;
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      padding: 0 8px;
+      font-size: 0.82em;
+      font-weight: 600;
+      color: white;
+      min-width: 32px;
+    }
+    .analysis-bar-pair .bar-mini.grpo-mini { background: linear-gradient(135deg, #e11d48, #fb7185); }
+    .analysis-bar-pair .bar-mini.sdpo-mini { background: linear-gradient(135deg, #2563eb, #3b82f6); }
+    .analysis-legend {
+      display: flex;
+      gap: 20px;
+      font-size: 0.82em;
+      color: var(--text-secondary);
+      margin-bottom: 14px;
+    }
+    .analysis-legend span {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .analysis-legend .dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 3px;
+    }
+    .analysis-legend .dot.grpo-dot { background: #e11d48; }
+    .analysis-legend .dot.sdpo-dot { background: #2563eb; }
+
+    .metric-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 16px;
+      margin: 20px 0;
+    }
+    .metric-card {
+      background: var(--bg-alt);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 18px 20px;
+      text-align: center;
+    }
+    .metric-card .metric-value {
+      font-size: 1.6em;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      margin-bottom: 2px;
+    }
+    .metric-card .metric-label {
+      font-size: 0.82em;
+      color: var(--text-secondary);
+      line-height: 1.3;
+    }
+    .metric-card .metric-value.grpo-color { color: #e11d48; }
+    .metric-card .metric-value.sdpo-color { color: #2563eb; }
+
     .baseline-marker {
       position: absolute;
       left: 0;
@@ -670,6 +742,187 @@
       actually wins). The gap between both baselines and SDPO measures what weights contribute.
       Claude Haiku&rsquo;s best result (1.009) comes from high-variance independent shots;
       SDPO achieves comparable improvements reliably from a much smaller model.
+    </p>
+  </section>
+
+  <hr>
+
+  <!-- Interpretability Analysis -->
+  <section>
+    <h2>Why SDPO Outperforms GRPO</h2>
+    <p>
+      We ran four complementary analyses on the trained checkpoints to understand <em>how</em> SDPO
+      achieves better results than GRPO. The picture is consistent: SDPO makes targeted, low-rank weight
+      changes that don&rsquo;t alter internal activation geometry but meaningfully shift what the model
+      predicts. GRPO&rsquo;s KL constraint keeps it too close to the base distribution to learn much.
+    </p>
+
+    <h3>1. Weight Delta SVD</h3>
+    <p>
+      We decompose &Delta;W&nbsp;=&nbsp;W<sub>ft</sub>&nbsp;&minus;&nbsp;W<sub>base</sub> via SVD across all
+      282 weight matrices to characterize the <em>structure</em> of what each method learns.
+    </p>
+
+    <div class="metric-grid">
+      <div class="metric-card">
+        <div class="metric-value sdpo-color">863</div>
+        <div class="metric-label">SDPO effective rank<br>(surgical changes)</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-value grpo-color">1346</div>
+        <div class="metric-label">GRPO effective rank<br>(diffuse changes)</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-value sdpo-color">4&times;</div>
+        <div class="metric-label">SDPO relative weight<br>change magnitude</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-value sdpo-color">13.9%</div>
+        <div class="metric-label">SDPO top-5 SV<br>concentration</div>
+      </div>
+    </div>
+
+    <p>
+      SDPO makes changes that are <strong>4&times; larger in magnitude but concentrated in fewer dimensions</strong>
+      (effective rank 863 vs 1346). Its top-5 singular values capture 13.9% of total variance vs GRPO&rsquo;s 8.7%.
+      This is the signature of targeted skill acquisition &mdash; learning specific computational patterns &mdash;
+      vs GRPO&rsquo;s diffuse distribution sharpening across many directions at once.
+    </p>
+
+    <h3>2. Forgetting Probes</h3>
+    <p>
+      Standard few-shot benchmarks (MMLU, HellaSwag, ARC, Winogrande) plus generative evaluation (GSM8K
+      8-shot CoT) and WikiText perplexity, measured via lm-eval-harness on both checkpoints.
+    </p>
+
+    <div class="table-wrapper">
+      <table>
+        <thead>
+          <tr><th>Metric</th><th>GRPO &Delta;</th><th>SDPO &Delta;</th><th>Interpretation</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>MC benchmark avg</td>
+            <td>&minus;0.21%</td>
+            <td>&minus;0.39%</td>
+            <td>Mild forgetting, within noise</td>
+          </tr>
+          <tr>
+            <td>MMLU (5-shot)</td>
+            <td>+0.06%</td>
+            <td>+0.02%</td>
+            <td>Knowledge fully preserved</td>
+          </tr>
+          <tr>
+            <td><strong>GSM8K CoT (8-shot)</strong></td>
+            <td>+0.23%</td>
+            <td class="best"><strong>+1.21%</strong></td>
+            <td>SDPO gains math reasoning</td>
+          </tr>
+          <tr>
+            <td>WikiText PPL</td>
+            <td>&minus;0.003</td>
+            <td class="best"><strong>&minus;0.105</strong></td>
+            <td>SDPO improves language modeling</td>
+          </tr>
+          <tr>
+            <td>KL(base&Vert;model)</td>
+            <td>0.0007</td>
+            <td>0.0017</td>
+            <td>SDPO diverges 2.3&times; more</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>
+      SDPO achieves a favorable learning-forgetting trade-off: it <strong>improves GSM8K by +1.21%</strong>
+      and WikiText perplexity by &minus;0.1 &mdash; genuine capability gains on generative tasks &mdash; while
+      preserving MMLU and accepting only mild MC benchmark degradation. GRPO&rsquo;s KL constraint (coefficient
+      1e-5) effectively freezes the distribution, preventing both forgetting <em>and</em> learning.
+    </p>
+
+    <h3>3. Activation Similarity</h3>
+    <p>
+      We measured per-token cosine similarity between base and fine-tuned model activations at layers 10, 20,
+      30, and 38 across 600 diverse sequences (C4, code, GSM8K, Wikipedia).
+    </p>
+    <p>
+      <strong>Result: cosine similarity &gt; 0.999 everywhere for both models.</strong> Neither GRPO nor SDPO
+      meaningfully changes the model&rsquo;s internal activation geometry. The representational space is nearly
+      identical to the base model. This means the weight changes operate at a finer granularity than activations
+      can capture &mdash; they modify what the model <em>outputs</em> without changing how it <em>represents</em>
+      inputs internally.
+    </p>
+
+    <h3>4. Logit Lens</h3>
+    <p>
+      Since activations are geometrically identical, we projected each layer&rsquo;s residual stream through
+      the unembedding matrix to see how <em>predictions</em> evolve through the network. This captures
+      functional differences invisible to activation-space metrics.
+    </p>
+
+    <div class="analysis-legend">
+      <span><span class="dot grpo-dot"></span> GRPO</span>
+      <span><span class="dot sdpo-dot"></span> SDPO</span>
+    </div>
+
+    <p style="font-size: 0.92em; margin-bottom: 6px;"><strong>Predictions changed from base (final layer)</strong></p>
+    <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 16px;">
+      <div style="flex: 1;">
+        <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px;">
+          <span style="font-size: 0.82em; color: var(--text-secondary); width: 50px; text-align: right;">GRPO</span>
+          <div style="background: var(--bg-alt); border-radius: 4px; flex: 1; height: 28px; position: relative;">
+            <div class="bar-mini grpo-mini" style="width: 38%; height: 100%; border-radius: 4px;">1.16%</div>
+          </div>
+        </div>
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <span style="font-size: 0.82em; color: var(--text-secondary); width: 50px; text-align: right;">SDPO</span>
+          <div style="background: var(--bg-alt); border-radius: 4px; flex: 1; height: 28px; position: relative;">
+            <div class="bar-mini sdpo-mini" style="width: 62%; height: 100%; border-radius: 4px;">1.88%</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <p style="font-size: 0.92em; margin-bottom: 6px;"><strong>Entropy shift (final layer, nats)</strong></p>
+    <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 20px;">
+      <div style="flex: 1;">
+        <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px;">
+          <span style="font-size: 0.82em; color: var(--text-secondary); width: 50px; text-align: right;">GRPO</span>
+          <div style="background: var(--bg-alt); border-radius: 4px; flex: 1; height: 28px; position: relative;">
+            <div class="bar-mini grpo-mini" style="width: 1%; min-width: 48px; height: 100%; border-radius: 4px;">~0</div>
+          </div>
+        </div>
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <span style="font-size: 0.82em; color: var(--text-secondary); width: 50px; text-align: right;">SDPO</span>
+          <div style="background: var(--bg-alt); border-radius: 4px; flex: 1; height: 28px; position: relative;">
+            <div class="bar-mini sdpo-mini" style="width: 95%; height: 100%; border-radius: 4px;">+0.017</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <p>
+      SDPO changes <strong>1.6&times; more predictions</strong> than GRPO (1.88% vs 1.16% of tokens at the final
+      layer) and consistently <strong>increases prediction entropy</strong> (+0.017 nats vs ~0). The divergence is
+      uniform across all layers &mdash; not concentrated at any particular depth &mdash; suggesting a distributed
+      functional shift rather than a single circuit being modified. Both models converge back toward base predictions
+      in the final layers (agreement rises from ~97% at mid-layers to ~99% at final), indicating the changes
+      primarily affect intermediate processing.
+    </p>
+
+    <h3>The Full Picture</h3>
+    <p>
+      Combining all four analyses: SDPO makes <strong>surgical, low-rank weight changes</strong> (SVD) that
+      <strong>don&rsquo;t alter activation geometry</strong> (cosine similarity &gt; 0.999) but
+      <strong>meaningfully shift predictions</strong> (1.6&times; more tokens changed, higher entropy) in a way
+      that <strong>improves generative capabilities</strong> (GSM8K +1.21%, WikiText &minus;0.1) without
+      degrading knowledge (MMLU +0.02%). GRPO&rsquo;s KL penalty keeps it too close to base to learn &mdash;
+      its changes are diffuse, tiny, and functionally invisible.
+    </p>
+    <p style="font-size: 0.88em; color: var(--text-secondary);">
+      Full analysis code and results: <a href="https://github.com/SilenNaihin/autoresearch-distillation/tree/main/scripts/interp"><code>scripts/interp/</code></a>
     </p>
   </section>
 
