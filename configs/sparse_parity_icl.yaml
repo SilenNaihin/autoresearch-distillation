@@ -1,0 +1,18 @@
+# ICL baseline config for sparse parity — same as SDPO but with LR=0
+# Uses PUCT sampling + feedback but no weight updates.
+# Usage: bash scripts/run_sparse_parity.sh [experiment-name] --config-name sparse_parity_icl
+
+defaults:
+  - sparse_parity_sdpo
+  - _self_
+
+actor_rollout_ref:
+  actor:
+    optim:
+      lr: 0.0
+      lr_warmup_steps: 0
+
+trainer:
+  project_name: sparse-parity-sdpo
+  experiment_name: qwen3-14b-icl-shared
+  save_freq: -1

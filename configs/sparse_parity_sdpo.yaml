@@ -1,0 +1,134 @@
+# SDPO config for sparse parity challenge on 1x A100 80GB (a100-backup-1)
+# Adapted from autoresearch_sdpo.yaml for single GPU + shorter context
+# Usage: bash scripts/run_sparse_parity.sh [experiment-name]
+
+defaults:
+  - sdpo
+  - _self_
+
+max_model_len: 32768
+
+data:
+  train_files: ["${vars.dir}/data/sparse_parity/train.parquet"]
+  val_files: ["${vars.dir}/data/sparse_parity/test.parquet"]
+  train_batch_size: 8
+  max_prompt_length: 8192
+  max_response_length: 24576
+  apply_chat_template_kwargs: {"enable_thinking": true}
+  return_raw_chat: True
+  filter_overlong_prompts: True
+  trust_remote_code: True
+  shuffle: True
+
+actor_rollout_ref:
+  model:
+    path: Qwen/Qwen3-14B
+    trust_remote_code: True
+    override_config:
+      attn_implementation: flash_attention_2
+  actor:
+    ppo_micro_batch_size_per_gpu: 1
+    ppo_mini_batch_size: 8
+    ppo_max_token_len_per_gpu: ${max_model_len}
+    use_dynamic_bsz: False
+    ulysses_sequence_parallel_size: 1
+    strategy: fsdp2
+    fsdp_config:
+      strategy: fsdp2
+      offload_policy: true
+      ulysses_sequence_parallel_size: 1
+    policy_loss:
+      loss_mode: sdpo
+    self_distillation:
+      teacher_update_rate: 0.01
+      max_reprompt_len: 8192
+      is_clip: 2.0
+      alpha: 1.0
+      distillation_topk: 20
+      success_reward_threshold: 0.0
+      dont_reprompt_on_self_success: True
+      include_environment_feedback: True
+      environment_feedback_only_without_solution: False
+      feedback_template: |-
+
+        The following is feedback from a previous attempt at this problem:
+
+        {feedback_raw}
+      reprompt_template: |-
+
+        {prompt}{solution}{feedback}
+
+        Using the information above, provide the best possible solution.
+    optim:
+      lr: 1e-6
+      lr_warmup_steps: 5
+  rollout:
+    name: vllm
+    n: 1
+    temperature: 1.0
+    tensor_model_parallel_size: 1
+    gpu_memory_utilization: 0.55
+    max_model_len: ${max_model_len}
+    max_num_batched_tokens: ${max_model_len}
+    calculate_log_probs: True
+    engine_kwargs:
+      vllm:
+        hf_overrides:
+          rope_scaling:
+            rope_type: yarn
+            factor: 1.0
+            original_max_position_embeddings: 32768
+    multi_turn:
+      enable: True
+      max_user_turns: 10
+      max_assistant_turns: 10
+      max_parallel_calls: 1
+      max_tool_response_length: 10000
+      tool_response_truncate_side: right
+      tool_config_path: ${vars.dir}/configs/sparse_parity_bash_tool.yaml
+      format: hermes
+      interaction_config_path: null
+    agent:
+      default_agent_loop: sparse_parity_agent
+      agent_loop_config_path: ${vars.dir}/configs/sparse_parity_agent_loops.yaml
+
+algorithm:
+  adv_estimator: grpo
+  norm_adv_by_std_in_grpo: False
+  use_kl_in_reward: False
+  rollout_correction:
+    rollout_is: token
+    rollout_is_threshold: 2.0
+
+critic:
+  strategy: fsdp2
+  ulysses_sequence_parallel_size: 1
+  use_dynamic_bsz: False
+  ppo_micro_batch_size_per_gpu: 1
+  fsdp_config:
+    strategy: fsdp2
+    ulysses_sequence_parallel_size: 1
+  model:
+    path: Qwen/Qwen3-14B
+
+custom_reward_function:
+  path: ${vars.dir}/training/reward.py
+
+reward_model:
+  use_reward_loop: False
+
+trainer:
+  project_name: sparse-parity-sdpo
+  experiment_name: qwen3-14b-sdpo-shared
+  n_gpus_per_node: 1
+  nnodes: 1
+  total_epochs: 1000
+  test_freq: -1
+  save_freq: 20
+  max_actor_ckpt_to_keep: 3
+  val_before_train: False
+  critic_warmup: 0
+  logger: ["console", "wandb"]
+  default_local_dir: ${vars.ckpt_dir}/${trainer.experiment_name}
+  rollout_data_dir: /data/rollout_dumps
+  log_val_generations: 5

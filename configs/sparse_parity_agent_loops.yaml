@@ -1,0 +1,6 @@
+- name: sparse_parity_agent
+  _target_: training.agent_loop.AutoresearchAgentLoop
+  _recursive_: false
+  c_puct: 1.0
+  max_states: 1000
+  task_config: tasks/sparse_parity.yaml

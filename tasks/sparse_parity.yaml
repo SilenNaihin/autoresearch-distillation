@@ -1,0 +1,101 @@
+task:
+  name: sparse_parity
+
+  workspace:
+    source_dir: sparse_parity
+    target_file: solve.py
+    remote_dir: ~/sparse_parity
+
+  execution:
+    run_command: "python evaluate.py 2>&1"
+    timeout: 120
+    needs_gpu: false
+    clear_torch_cache: false
+    setup_commands:
+      - "pip install numpy"
+      - "pip install git+https://github.com/cybertronai/sparse-parity-challenge.git"
+
+  scoring:
+    metric: dmc
+    direction: minimize
+    baseline: 10000000.0  # ~10M DMC (naive correlation baseline, updated after seed eval)
+    parse_mode: key_value
+    metrics:
+      - dmc
+      - accuracy
+      - time_s
+      - n_samples_used
+    display_metrics:
+      - accuracy
+      - time_s
+      - n_samples_used
+    degradation_threshold: 5000000.0  # 5M DMC degradation is significant
+    cacheable_crash_patterns:
+      - "SyntaxError"
+      - "IndentationError"
+
+  prompt:
+    system: |-
+      You are an algorithm researcher optimizing a sparse parity solver for minimal data movement cost (DMC).
+
+      ## Problem
+      Given n_bits=20 input bits (values in {-1, +1}) and labels y = product of k_sparse=3 secret bits,
+      find the indices of the secret bits. Your solver receives 200 training samples.
+
+      ## Objective
+      Minimize DMC (Data Movement Complexity) while maintaining >= 95% accuracy across 3 random seeds.
+
+      DMC measures the total cost of reading data from memory. Each read costs sqrt(stack_distance),
+      where stack_distance is how deep the data sits in an LRU stack (how long ago it was last accessed).
+      Lower DMC = better cache locality = more energy efficient.
+
+      Key principles for low DMC:
+      - Use fewer samples (less data to read)
+      - Access data sequentially, not randomly
+      - Reuse recently-written data (reads from top of LRU stack are cheap)
+      - Prefer small working sets over large ones
+      - Avoid creating large intermediate arrays
+
+      ## Rules
+      - Only numpy (imported as `np`) is allowed. No scipy, sklearn, or other packages.
+      - Your function signature must be: `def solve(x, y, n_bits, k_sparse) -> list[int]`
+      - x is a numpy array of shape (n_samples, n_bits) with values in {-1, +1}
+      - y is a numpy array of shape (n_samples,) with values in {-1, +1}
+      - Return a sorted list of k_sparse integer indices
+      - Timeout: 60 seconds
+
+      ## Scoring context
+      Current leaderboard best: ~19,000 DMC (Sequential Elimination).
+      A naive correlation approach scores ~10,000,000 DMC. The gap is enormous.
+
+      ## Workflow
+      1. Study the current solve.py and think about what algorithmic changes could lower DMC.
+      2. Make targeted edits using sed/bash. Do not rewrite the entire file unless you have a fundamentally different approach.
+      3. When done, submit: echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT
+
+      ## Important
+      - You are ONLY editing solve.py. You do NOT run the evaluation.
+      - We will run `python evaluate.py` after you submit.
+      - Think carefully about memory access patterns, not just correctness.
+    instance: |-
+      ## Current {target_file}
+      ```{code_lang}
+      {file_content}
+      ```
+
+      Improve this solution to reduce DMC while maintaining >= 95% accuracy. Think about which memory accesses are expensive and how to eliminate or reorder them.
+    code_lang: python
+    file_marker: "## Current {target_file}"
+
+  feedback:
+    no_change: "No changes were made to solve.py. You must make edits to reduce DMC."
+    sed_failed: "FAILURE: your sed command failed: {error}\nYou must specify the target file and ensure the pattern matches exactly."
+    success: "SUCCESS: These changes reduced DMC. This is a good result. Continue refining this approach or explore new algorithmic strategies."
+    failure: "These changes did not reduce DMC. Try a different approach — consider using fewer samples, accessing data more sequentially, or switching to a fundamentally different algorithm."
+    duplicate: "This exact code has already been evaluated: {metric}={value}.\nTry a different modification."
+    crash: "This code crashed. Check for syntax errors, runtime errors, or violations of the numpy-only constraint. Do not re-attempt this exact change."
+    degradation: "These changes made DMC significantly worse (degraded by {degradation}). Reconsider your approach."
+
+  fleet:
+    slots:
+      - {host: a100-backup-1, gpu_id: "0", name: a100-cpu, remote_dir: ~/sparse_parity}
