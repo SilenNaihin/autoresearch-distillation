@@ -13,7 +13,7 @@ If accuracy < 95%, DMC is set to 999999999 (effectively infinite) so the
 reward function naturally returns 0.
 """
 
-import importlib
+import importlib.util
 import sys
 import time
 
