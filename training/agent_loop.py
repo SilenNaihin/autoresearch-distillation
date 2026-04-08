@@ -77,7 +77,8 @@ def _get_buffer(task: TaskConfig) -> ReuseBuffer:
     if _buffer is None:
         with _buffer_lock:
             if _buffer is None:
-                buf_path = Path(f"/data/reuse_buffer_{task.name}.json")
+                data_dir = os.environ.get("DATA_DIR", "/data")
+                buf_path = Path(data_dir) / f"reuse_buffer_{task.name}.json"
                 _buffer = ReuseBuffer(buf_path, direction=task.scoring.direction,
                                       **_buffer_kwargs)
     return _buffer

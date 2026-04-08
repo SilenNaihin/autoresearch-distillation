@@ -27,7 +27,8 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "WARN"))
 
-CACHE_DIR = Path("/data/cache") if os.access("/data", os.W_OK) else Path("outputs/cache")
+_data_dir = Path(os.environ.get("DATA_DIR", "/data"))
+CACHE_DIR = _data_dir / "cache" if os.access(str(_data_dir), os.W_OK) else Path(__file__).resolve().parent.parent / "outputs" / "cache"
 
 # Repo-committed merged cache from all previous runs (read-only seed)
 _REPO_DIR = Path(__file__).resolve().parent
