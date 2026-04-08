@@ -35,6 +35,7 @@ actor_rollout_ref:
     strategy: fsdp2
     fsdp_config:
       strategy: fsdp2
+      model_dtype: bf16
       offload_policy: true
       ulysses_sequence_parallel_size: 1
     policy_loss:
