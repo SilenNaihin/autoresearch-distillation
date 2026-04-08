@@ -133,6 +133,9 @@ def extract_code(content: str) -> str:
     # Strip thinking tokens if present
     if "</think>" in content:
         content = content[content.index("</think>") + len("</think>"):].strip()
+    elif content.startswith("<think>"):
+        # Thinking was truncated — no code was generated
+        return ""
     if "```python" in content:
         start = content.index("```python") + len("```python")
         end = content.index("```", start)
@@ -163,7 +166,7 @@ def main():
     parser.add_argument("--model", type=str, default=MODEL)
     parser.add_argument("--gpu-memory-utilization", type=float, default=0.55)
     parser.add_argument("--max-model-len", type=int, default=32768)
-    parser.add_argument("--max-tokens", type=int, default=4096)
+    parser.add_argument("--max-tokens", type=int, default=16384)
     args = parser.parse_args()
 
     # Import vLLM here so the script can be --help'd without GPU
@@ -249,6 +252,12 @@ def main():
             print(f"  Generation failed: {e}")
             history.append({"status": "generation_error", "feedback": str(e)})
             wandb.log({"turn": turn, "status": "generation_error", "reward": 0.0})
+            continue
+
+        if not modified:
+            print("  Empty code extracted (thinking truncated?)")
+            history.append({"status": "generation_error", "feedback": "Model thinking was truncated, no code produced"})
+            wandb.log({"turn": turn, "status": "truncated_thinking", "reward": 0.0})
             continue
 
         # Debug: show first/last lines of extracted code
