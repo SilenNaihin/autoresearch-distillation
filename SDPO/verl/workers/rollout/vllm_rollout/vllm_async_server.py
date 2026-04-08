@@ -115,7 +115,7 @@ class ExternalZeroMQDistributedExecutor(Executor):
         self.collective_rpc("init_device")
         self.collective_rpc("load_model")
 
-    if _VLLM_VERSION >= version.parse("0.12.0"):
+    if _VLLM_VERSION >= version.parse("0.11.0"):
 
         def execute_model(
             self, scheduler_output: "SchedulerOutput", non_block: bool = False
