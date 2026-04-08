@@ -69,13 +69,15 @@ def evaluate_solve_py(solve_py_content: str, task: TaskConfig) -> dict:
         # Write modified solve.py
         (Path(tmpdir) / task.workspace.target_file).write_text(solve_py_content)
 
-        # Run evaluation
+        # Run evaluation (inherit PYTHONPATH so TrackedArray is available)
+        env = os.environ.copy()
         result = subprocess.run(
-            ["python", "evaluate.py"],
+            ["python3", "evaluate.py"],
             cwd=tmpdir,
             capture_output=True,
             text=True,
             timeout=120,
+            env=env,
         )
 
         metrics = task.parse_metrics(result.stdout) if result.stdout else {}
