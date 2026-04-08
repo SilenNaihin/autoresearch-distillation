@@ -7,13 +7,13 @@ task:
     remote_dir: ~/sparse_parity
 
   execution:
-    run_command: "python evaluate.py 2>&1"
+    run_command: "PYTHONPATH=~/sparse-parity-challenge/src:$PYTHONPATH python evaluate.py 2>&1"
     timeout: 120
     needs_gpu: false
     clear_torch_cache: false
     setup_commands:
       - "pip install numpy"
-      - "pip install git+https://github.com/cybertronai/sparse-parity-challenge.git"
+      - "test -d ~/sparse-parity-challenge || git clone https://github.com/cybertronai/sparse-parity-challenge.git ~/sparse-parity-challenge"
 
   scoring:
     metric: dmc
