@@ -94,6 +94,10 @@ actor_rollout_ref:
     agent:
       default_agent_loop: sparse_parity_agent
       agent_loop_config_path: ${vars.dir}/configs/sparse_parity_agent_loops.yaml
+  ref:
+    fsdp_config:
+      model_dtype: bf16
+      offload_policy: true
 
 algorithm:
   adv_estimator: grpo
