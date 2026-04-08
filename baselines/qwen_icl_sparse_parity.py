@@ -251,6 +251,21 @@ def main():
             wandb.log({"turn": turn, "status": "generation_error", "reward": 0.0})
             continue
 
+        # Debug: show first/last lines of extracted code
+        code_lines = modified.split('\n')
+        print(f"  Extracted {len(code_lines)} lines. First: {code_lines[0][:80] if code_lines else '(empty)'}")
+        if len(code_lines) > 1:
+            print(f"  Last: {code_lines[-1][:80]}")
+
+        # Validate syntax before eval
+        try:
+            compile(modified, "<solve.py>", "exec")
+        except SyntaxError as e:
+            print(f"  SYNTAX ERROR: {e}")
+            history.append({"status": "crash", "feedback": f"Syntax error: {e}"})
+            wandb.log({"turn": turn, "status": "syntax_error", "reward": 0.0})
+            continue
+
         diff_text = make_diff(selected_code, modified)
         cache_diff = make_diff(baseline_code, modified)
 
@@ -278,7 +293,7 @@ def main():
         accuracy = metrics.get("accuracy")
 
         if eval_result["returncode"] != 0 or dmc is None:
-            crash_info = (eval_result["stderr"] or eval_result["stdout"] or "unknown")[:500]
+            crash_info = (eval_result["stderr"] or eval_result["stdout"] or "unknown")[:1000]
             print(f"CRASH: {crash_info}")
             history.append({
                 "status": "crash",
