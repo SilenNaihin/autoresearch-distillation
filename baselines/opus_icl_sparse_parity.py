@@ -98,6 +98,7 @@ def run_agent_turn(
     solve_py: str,
     history: list[dict],
     temperature: float = 1.0,
+    model: str = MODEL,
 ) -> str:
     """One agent turn: send solve.py + history, get back modified solve.py."""
     system_prompt = task.prompt.system
@@ -133,7 +134,7 @@ def run_agent_turn(
     ]
 
     response = litellm.completion(
-        model=MODEL,
+        model=model,
         messages=messages,
         temperature=temperature,
         max_tokens=4096,
@@ -176,8 +177,7 @@ def main():
     parser.add_argument("--model", type=str, default=MODEL)
     args = parser.parse_args()
 
-    global MODEL
-    MODEL = args.model
+    model_name = args.model
 
     task = load_task()
     buffer = ReuseBuffer(Path(args.buffer_path), direction=task.scoring.direction)
@@ -192,7 +192,7 @@ def main():
 
     # Init wandb
     config = {
-        "model": args.model,
+        "model": model_name,
         "max_turns": args.max_turns,
         "temperature": args.temperature,
         "buffer_path": args.buffer_path,
@@ -224,7 +224,7 @@ def main():
 
         # Generate modified solve.py
         try:
-            modified = run_agent_turn(task, selected_code, history, args.temperature)
+            modified = run_agent_turn(task, selected_code, history, args.temperature, model=model_name)
         except Exception as e:
             print(f"  Generation failed: {e}")
             history.append({"status": "generation_error", "feedback": str(e)})
