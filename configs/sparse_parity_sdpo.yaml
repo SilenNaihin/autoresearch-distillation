@@ -126,6 +126,7 @@ reward_model:
 
 trainer:
   project_name: sparse-parity-sdpo
+  group_name: sparse-parity-sdpo
   experiment_name: qwen3-14b-sdpo-shared
   n_gpus_per_node: 1
   nnodes: 1
