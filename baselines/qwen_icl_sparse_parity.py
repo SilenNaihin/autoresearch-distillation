@@ -130,6 +130,9 @@ def build_prompt(
 
 def extract_code(content: str) -> str:
     """Extract Python code from model response."""
+    # Strip thinking tokens if present
+    if "</think>" in content:
+        content = content[content.index("</think>") + len("</think>"):].strip()
     if "```python" in content:
         start = content.index("```python") + len("```python")
         end = content.index("```", start)
@@ -276,7 +279,7 @@ def main():
 
         if eval_result["returncode"] != 0 or dmc is None:
             crash_info = (eval_result["stderr"] or eval_result["stdout"] or "unknown")[:500]
-            print(f"CRASH: {crash_info[:100]}")
+            print(f"CRASH: {crash_info}")
             history.append({
                 "status": "crash",
                 "feedback": f"Crash: {crash_info}",
