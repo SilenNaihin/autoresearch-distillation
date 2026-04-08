@@ -23,7 +23,10 @@ import asyncio
 import json
 import logging
 import os
+import shutil
+import subprocess
 import sys
+import tempfile
 import threading
 from pathlib import Path
 from typing import Any
@@ -43,23 +46,43 @@ logger = logging.getLogger(__name__)
 logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "WARN"))
 
 # ---------------------------------------------------------------------------
-# Shared GPU pool (singleton, thread-safe)
+# Local evaluation
 # ---------------------------------------------------------------------------
 
-_pool = None
-_pool_lock = threading.Lock()
 
+def _evaluate_locally(modified_code: str, task: TaskConfig) -> subprocess.CompletedProcess:
+    """Run evaluation in an isolated temp dir. Returns CompletedProcess."""
+    tmpdir = tempfile.mkdtemp(prefix="eval_")
+    try:
+        src_dir = Path(task.workspace.source_dir)
+        for f in src_dir.iterdir():
+            if f.name == "__pycache__":
+                continue
+            if f.is_file():
+                shutil.copy2(f, tmpdir)
+            elif f.is_dir():
+                shutil.copytree(f, Path(tmpdir) / f.name,
+                                ignore=shutil.ignore_patterns("__pycache__"))
 
-def _get_pool(task: TaskConfig):
-    """Lazily initialize the shared GPUPoolRunner."""
-    global _pool
-    if _pool is None:
-        with _pool_lock:
-            if _pool is None:
-                from runners import GPUPoolRunner
-                _pool = GPUPoolRunner(task=task)
-                logger.info(f"Initialized GPUPoolRunner with {_pool.total} slots")
-    return _pool
+        (Path(tmpdir) / task.workspace.target_file).write_text(modified_code)
+
+        env = os.environ.copy()
+        run_cmd = task.execution.run_command
+        result = subprocess.run(
+            run_cmd, shell=True, cwd=tmpdir, capture_output=True, text=True,
+            timeout=task.execution.timeout, env=env,
+        )
+        return result
+    except subprocess.TimeoutExpired:
+        return subprocess.CompletedProcess(
+            args="", returncode=-1, stdout="", stderr="TIMEOUT"
+        )
+    except Exception as e:
+        return subprocess.CompletedProcess(
+            args="", returncode=-1, stdout="", stderr=str(e)
+        )
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
 
 
 # ---------------------------------------------------------------------------
@@ -332,10 +355,9 @@ class AutoresearchAgentLoop(ToolAgentLoop):
                     return reward, f"{feedback}\n\n{task.feedback.success}"
                 return reward, f"{feedback}\n\n{task.feedback.failure}"
 
-        # Dispatch to fleet (blocking I/O → run in thread)
+        # Evaluate locally (blocking I/O → run in thread)
         self._is_novel = 1.0
-        pool = _get_pool(task)
-        output = await asyncio.to_thread(pool.run, modified)
+        output = await asyncio.to_thread(_evaluate_locally, modified, task)
 
         # Parse metrics
         metrics = task.parse_metrics(output.stdout) if output.stdout else {}
