@@ -122,22 +122,40 @@ Expected memory profile:
 - Rollout: vLLM 0.55 × 80GB = 44GB (model + KV cache)
 - CPU RAM: minimal (no offload)
 
-## B5: SDPO Qwen3-14B + LoRA rank 32 (PENDING)
+## B5: SDPO Qwen3-14B + LoRA rank 32 (RUNNING)
+
+### Hiccups
+8. **bitsandbytes optimizer_impl default** — CLI override changed `optimizer` to AdamW
+   but `optimizer_impl` fell back to `bitsandbytes.optim` from base sdpo config.
+   `bitsandbytes.optim.AdamW` still requires CUDA tensors for its `is_on_gpu()` check,
+   which fails because some LoRA parameters have `grad=None`.
+   Fixed: added CLI override `actor_rollout_ref.actor.optim.optimizer_impl=torch.optim`
+   and YAML `optimizer_impl: torch.optim`. Commit: `c066243`
+
+### Config
+- Model: Qwen/Qwen3-14B + LoRA rank 32 (14.90B total, ~130M trainable)
+- Optimizer: torch.optim.AdamW (on GPU)
+- FSDP2 without CPU offload
+- wandb: https://wandb.ai/kfallah/sparse-parity-sdpo/runs/j08tcp9s
+- Commit: `c066243`
 
 ### Launch Command
 ```bash
 cd /home/azureuser/autoresearch-distillation/SDPO && \
+source /home/azureuser/miniconda3/bin/activate verl && \
 TASK=sparse_parity DATA_DIR=/home/azureuser/data \
 PYTHONPATH=/home/azureuser/sparse-parity-challenge/src:/home/azureuser/autoresearch-distillation:$PYTHONPATH \
-RAY_memory_monitor_refresh_ms=0 \
-python training/run_sdpo.py --config-name sparse_parity_sdpo \
+RAY_memory_monitor_refresh_ms=0 HYDRA_FULL_ERROR=1 \
+python /home/azureuser/autoresearch-distillation/training/run_sdpo.py \
+  --config-name sparse_parity_sdpo \
   vars.dir=/home/azureuser/autoresearch-distillation \
   vars.ckpt_dir=/home/azureuser/data/checkpoints \
   trainer.rollout_data_dir=/home/azureuser/data/rollout_dumps \
   trainer.group_name=sparse-parity-sdpo \
   actor_rollout_ref.rollout.enforce_eager=True \
   actor_rollout_ref.model.lora_rank=32 \
-  actor_rollout_ref.actor.optim.optimizer=AdamW
+  actor_rollout_ref.actor.optim.optimizer=AdamW \
+  actor_rollout_ref.actor.optim.optimizer_impl=torch.optim
 ```
 
 ## Open Questions
