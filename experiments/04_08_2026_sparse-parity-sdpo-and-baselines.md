@@ -98,8 +98,50 @@ python training/run_sdpo.py --config-name sparse_parity_sdpo \
 - CPU: 191.7 / 216 GB (FSDP2 offloaded params + 8-bit optimizer states)
 - Step time: ~28 min/step (dominated by CPU optimizer step at 21 min)
 
+## B4 → B5: Switch to LoRA rank 32
+
+Full fine-tuning with CPU offload was unacceptably slow: 21 min optimizer step (66% of
+31 min total). Root cause: FSDP2 offload_policy=true forces all 14.77B param updates to
+CPU. No way to selectively keep optimizer on GPU in FSDP2.
+
+**Fix: LoRA rank 32** — reduces trainable params from 14.77B to ~50M. Eliminates need
+for CPU offload entirely. Optimizer runs on GPU.
+
+Changes:
+- `actor_rollout_ref.model.lora_rank: 32` (VERL native PEFT support)
+- `actor_rollout_ref.model.lora_alpha: 16`
+- `actor_rollout_ref.model.target_modules: all-linear`
+- `actor_rollout_ref.actor.fsdp_config.offload_policy: false`
+- `actor_rollout_ref.ref.fsdp_config.offload_policy: false`
+- Switched back to standard AdamW (8-bit unnecessary for 50M params)
+- New experiment_name: `qwen3-14b-sdpo-lora32`
+- Ref model: VERL auto-uses base model (adapter disabled) as reference when LoRA enabled
+
+Expected memory profile:
+- Training: ~30GB model (bf16) + ~300MB LoRA adapter + optimizer ≈ 31GB
+- Rollout: vLLM 0.55 × 80GB = 44GB (model + KV cache)
+- CPU RAM: minimal (no offload)
+
+## B5: SDPO Qwen3-14B + LoRA rank 32 (PENDING)
+
+### Launch Command
+```bash
+cd /home/azureuser/autoresearch-distillation/SDPO && \
+TASK=sparse_parity DATA_DIR=/home/azureuser/data \
+PYTHONPATH=/home/azureuser/sparse-parity-challenge/src:/home/azureuser/autoresearch-distillation:$PYTHONPATH \
+RAY_memory_monitor_refresh_ms=0 \
+python training/run_sdpo.py --config-name sparse_parity_sdpo \
+  vars.dir=/home/azureuser/autoresearch-distillation \
+  vars.ckpt_dir=/home/azureuser/data/checkpoints \
+  trainer.rollout_data_dir=/home/azureuser/data/rollout_dumps \
+  trainer.group_name=sparse-parity-sdpo \
+  actor_rollout_ref.rollout.enforce_eager=True \
+  actor_rollout_ref.model.lora_rank=32 \
+  actor_rollout_ref.actor.optim.optimizer=AdamW
+```
+
 ## Open Questions
-1. Can optimizer step time be reduced? 21 min for CPU AdamW8bit is very slow.
-   Possible: reduce offload (but OOM risk), or switch to parameter-efficient training.
-2. Will model learn anything useful given 28 min/step × 2000 steps = ~39 days?
-   May need to reduce total_epochs or use more aggressive LR.
+1. Will LoRA rank 32 have enough capacity for this task?
+2. All rewards were 0.0 in B4 — partly expected (LR warmup) but experiment_dispatch
+   time was also 0.0. Need to verify local evaluations actually run.
+3. May need higher LR for LoRA (1e-6 is conservative; typical LoRA LR is 1e-4 to 2e-4).
