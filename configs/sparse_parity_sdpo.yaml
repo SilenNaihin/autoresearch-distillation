@@ -1,5 +1,5 @@
 # SDPO config for sparse parity challenge on 1x A100 80GB (a100-backup-1)
-# Adapted from autoresearch_sdpo.yaml for single GPU + shorter context
+# Qwen3-8B + LoRA r32, LR 5e-5, 4x parallel tool calls, 0.45 GPU mem util
 # Usage: bash scripts/run_sparse_parity.sh [experiment-name]
 
 defaults:
@@ -22,11 +22,12 @@ data:
 
 actor_rollout_ref:
   model:
-    path: Qwen/Qwen3-14B
+    path: Qwen/Qwen3-8B
     trust_remote_code: True
     lora_rank: 32
     lora_alpha: 16
     target_modules: all-linear
+    enable_gradient_checkpointing: true
     override_config:
       attn_implementation: flash_attention_2
   actor:
@@ -66,29 +67,22 @@ actor_rollout_ref:
     optim:
       optimizer: AdamW
       optimizer_impl: torch.optim
-      lr: 1e-6
+      lr: 5e-5
       lr_warmup_steps: 5
   rollout:
     name: vllm
     n: 1
     temperature: 1.0
     tensor_model_parallel_size: 1
-    gpu_memory_utilization: 0.55
+    gpu_memory_utilization: 0.35
     max_model_len: ${max_model_len}
     max_num_batched_tokens: ${max_model_len}
     calculate_log_probs: True
-    engine_kwargs:
-      vllm:
-        hf_overrides:
-          rope_scaling:
-            rope_type: yarn
-            factor: 1.0
-            original_max_position_embeddings: 32768
     multi_turn:
       enable: True
       max_user_turns: 10
       max_assistant_turns: 10
-      max_parallel_calls: 1
+      max_parallel_calls: 4
       max_tool_response_length: 10000
       tool_response_truncate_side: right
       tool_config_path: ${vars.dir}/configs/sparse_parity_bash_tool.yaml
@@ -119,7 +113,7 @@ critic:
     strategy: fsdp2
     ulysses_sequence_parallel_size: 1
   model:
-    path: Qwen/Qwen3-14B
+    path: Qwen/Qwen3-8B
 
 custom_reward_function:
   path: ${vars.dir}/training/reward.py
@@ -130,7 +124,7 @@ reward_model:
 trainer:
   project_name: sparse-parity-sdpo
   group_name: sparse-parity-sdpo
-  experiment_name: qwen3-14b-sdpo-lora32
+  experiment_name: qwen3-8b-sdpo-lora32
   n_gpus_per_node: 1
   nnodes: 1
   total_epochs: 1000
