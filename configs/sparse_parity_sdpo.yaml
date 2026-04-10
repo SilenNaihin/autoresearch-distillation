@@ -27,6 +27,7 @@ actor_rollout_ref:
     lora_rank: 32
     lora_alpha: 16
     target_modules: all-linear
+    enable_gradient_checkpointing: true
     override_config:
       attn_implementation: flash_attention_2
   actor:
