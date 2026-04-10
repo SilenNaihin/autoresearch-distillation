@@ -9,6 +9,77 @@
 Run SDPO training with Qwen3-14B and Opus 4.6 single-shot baseline (no ICL feedback)
 for the sparse parity DMC challenge. Follows ICL baselines from earlier experiment.
 
+## Methodology & Thinking
+
+### Problem: Sparse Parity DMC Optimization
+
+The sparse parity challenge asks for an algorithm that identifies parity-relevant bits in a
+binary dataset while minimizing **Data Movement Complexity (DMC)** — `sum(sqrt(stack_distance))`
+per array read. Lower DMC = more cache-friendly memory access patterns. The leaderboard best
+prior to our experiments was Sequential Elimination at ~19,153 DMC.
+
+### 7 Seed Solutions
+
+We pre-seeded the PUCT reuse buffer with 7 diverse algorithmic approaches, each representing
+a fundamentally different strategy for sparse parity detection:
+
+1. **Correlation** — pairwise correlation between features and label
+2. **GF(2) Gaussian Elimination** — linear algebra over GF(2) to find parity support
+3. **Sequential Elimination** — iteratively eliminate irrelevant bits
+4. **Walsh-Hadamard Transform** — spectral analysis to identify parity bits
+5. **Brute Force** — exhaustive search over bit subsets
+6. **Recursive Bisection** — divide-and-conquer on feature subsets
+7. **Coordinate Descent** — greedy single-bit optimization
+
+These seeds serve two purposes: (1) give the model diverse starting points to modify rather
+than generating code from scratch, and (2) provide the PUCT tree with initial reward signals
+so exploration is guided toward promising algorithmic families from the start.
+
+### PUCT Reuse Buffer
+
+The buffer implements a search tree (c_puct=1.0, max_states=1000) that balances exploitation
+(selecting states with best known DMC) against exploration (trying less-visited states).
+Each rollout selects a parent state via PUCT scoring, the model modifies that code, and if
+the result passes correctness checks, it's added as a new child node with reward = baseline_DMC - new_DMC.
+
+### Baseline Strategy
+
+We established baselines in increasing order of compute cost:
+
+1. **ICL with feedback loop** (Opus 4.6 & Qwen3-14B) — Multi-turn: model sees its previous
+   attempt's code + evaluation result, iterates. Tests whether in-context learning alone can
+   optimize DMC without weight updates. Opus (20 turns) vs Qwen (30 turns).
+
+2. **Single-shot without ICL** (Opus 4.6) — Each turn is independent: model sees a seed
+   solution from the PUCT buffer and generates a modification with no history of what
+   worked/failed. Isolates the contribution of feedback vs raw model capability.
+
+3. **SDPO training** (Qwen3-14B) — RL fine-tuning via self-distillation. The model learns
+   from a teacher (EMA of itself) that is reprompted with feedback from failed trajectories.
+   Tests whether weight updates can close the gap between the 14B model and Opus.
+
+### What We're Trying to Demonstrate
+
+The core question: **Can RL fine-tuning (SDPO) teach a smaller model (Qwen3-14B/8B) to
+match or approach frontier model (Opus) performance on algorithmic optimization tasks?**
+
+Specifically:
+- Opus ICL sets the ceiling — what's achievable with the best model + feedback
+- Qwen ICL shows the gap — how much worse is the smaller model with identical setup
+- Opus single-shot shows the value of feedback — same model, no iteration
+- SDPO training asks whether gradient updates can close the Qwen↔Opus gap
+
+## All Results Summary
+
+| Method | Model | Best DMC | Turns/Steps | Notes |
+|--------|-------|----------|-------------|-------|
+| ICL (feedback loop) | Opus 4.6 | **15,724** | 20 turns | Best overall. GF(2) elimination by turn 7 |
+| ICL (feedback loop) | Qwen3-14B | 1,172,414 | 30 turns | 75x worse than Opus |
+| Single-shot (no ICL) | Opus 4.6 | 28,103 | 50 turns | No feedback history, each turn independent |
+| SDPO full FT | Qwen3-14B | N/A | 4 steps | Killed — 31 min/step, 66% on CPU optimizer |
+| SDPO LoRA r32 | Qwen3-14B | 637,131 | 20 steps | Stalled — LR 1e-6 too low, policy barely moves |
+| Leaderboard prior | Sequential Elim. | ~19,153 | — | Before our experiments |
+
 ## B3: Opus Single-Shot (COMPLETE)
 
 - Script: `baselines/opus_single_shot_sparse_parity.py`
