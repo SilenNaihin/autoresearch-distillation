@@ -233,6 +233,33 @@ bash scripts/run_training.sh configs/sparse_parity_icl.yaml
 bash scripts/run_training.sh configs/sparse_parity_sdpo.yaml
 ```
 
+## Results
+
+### Summary
+
+| Method | Model | Best DMC | Turns/Steps | Notes |
+|--------|-------|----------|-------------|-------|
+| ICL (feedback loop) | Opus 4.6 | **15,724** | 20 turns | Best overall. GF(2) elimination by turn 7 |
+| ICL (feedback loop) | Qwen3-14B | 1,172,414 | 30 turns | 75x worse than Opus |
+| Single-shot (no ICL) | Opus 4.6 | 28,103 | 50 turns | No feedback history, each turn independent |
+| SDPO full FT | Qwen3-14B | N/A | 4 steps | Killed — 31 min/step, 66% on CPU optimizer |
+| SDPO LoRA r32 | Qwen3-14B | 637,131 | 20 steps | Stalled — LR 1e-6 too low, policy barely moves |
+| Leaderboard prior | Sequential Elim. | ~19,153 | — | Before our experiments |
+
+### Key findings so far
+
+- **Opus ICL beat the leaderboard** — 15,724 DMC (18% better than prior best 19,153), converging by turn 7 via GF(2) elimination.
+- **Qwen3-14B ICL is 75x worse** than Opus with the same setup (1,172,414 vs 15,724). The gap motivates SDPO training.
+- **Single-shot Opus (no feedback)** achieves 28,103 — still competitive with the leaderboard, showing strong base capability but confirming feedback helps.
+- **SDPO full fine-tuning was too slow** — CPU optimizer dominated at 21 min/step. Switched to LoRA r32 (8.7x speedup).
+- **SDPO LoRA r32 stalled** — LR 1e-6 was 50x too low for LoRA, policy barely moved (<1% different from base after 20 steps).
+- **Next: B6** — Qwen3-8B with LR 5e-5, 4x parallel tool calls, reduced GPU memory utilization.
+
+### Experiment journals
+
+- [ICL baselines (B1, B2)](../experiments/04_08_2026_sparse-parity-icl-baselines.md) — Opus and Qwen3-14B ICL with feedback loop
+- [SDPO training + Opus single-shot (B3-B5)](../experiments/04_08_2026_sparse-parity-sdpo-and-baselines.md) — Single-shot baseline, full FT, LoRA r32, methodology
+
 ## Open Questions
 
 - **n_bits scaling:** The challenge uses n_bits=20. Should we also test n_bits=50 or n_bits=100 to
