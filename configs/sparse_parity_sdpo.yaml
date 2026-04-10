@@ -73,7 +73,7 @@ actor_rollout_ref:
     n: 1
     temperature: 1.0
     tensor_model_parallel_size: 1
-    gpu_memory_utilization: 0.45
+    gpu_memory_utilization: 0.35
     max_model_len: ${max_model_len}
     max_num_batched_tokens: ${max_model_len}
     calculate_log_probs: True
