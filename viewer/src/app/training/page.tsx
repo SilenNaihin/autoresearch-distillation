@@ -197,6 +197,8 @@ function TrainingRunCard({ run }: { run: TrainingRun }) {
     ? new Date(run.started_at).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })
     : null;
 
+  const em = run.eval_metrics;
+
   return (
     <Card>
       <div className="flex items-start justify-between gap-4">
@@ -218,6 +220,34 @@ function TrainingRunCard({ run }: { run: TrainingRun }) {
               <span className="text-text-tertiary">{run.config_summary}</span>
             )}
           </div>
+          {em && (em.pass_rate != null || em.avg_reward != null) && (
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-2 text-xs">
+              {em.pass_rate != null && (
+                <span>
+                  <span className="text-text-tertiary">Pass rate </span>
+                  <span className="font-semibold">{(em.pass_rate * 100).toFixed(1)}%</span>
+                </span>
+              )}
+              {em.avg_reward != null && (
+                <span>
+                  <span className="text-text-tertiary">Avg reward </span>
+                  <span className="font-semibold">{em.avg_reward.toFixed(3)}</span>
+                </span>
+              )}
+              {em.scenarios_completed != null && (
+                <span>
+                  <span className="text-text-tertiary">Scenarios </span>
+                  <span className="font-semibold">{em.scenarios_completed}</span>
+                </span>
+              )}
+              {em.by_category && Object.entries(em.by_category).map(([cat, rate]) => (
+                <span key={cat}>
+                  <span className="text-text-tertiary">{cat} </span>
+                  <span className="font-semibold">{(rate * 100).toFixed(0)}%</span>
+                </span>
+              ))}
+            </div>
+          )}
         </div>
         {run.wandb_url && (
           <a

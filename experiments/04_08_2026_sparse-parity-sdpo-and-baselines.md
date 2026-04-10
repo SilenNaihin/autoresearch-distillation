@@ -23,7 +23,7 @@ Worse than Opus ICL (15,724) since single-shot has no feedback history.
 Each turn is independent — model sees a seed solution from PUCT buffer and
 generates a modification without context on what worked/failed before.
 
-## B4: SDPO Qwen3-14B (RUNNING)
+## B4: SDPO Qwen3-14B Full FT (KILLED — too slow)
 
 ### Config
 - Model: Qwen/Qwen3-14B (14.77B params)
@@ -122,7 +122,7 @@ Expected memory profile:
 - Rollout: vLLM 0.55 × 80GB = 44GB (model + KV cache)
 - CPU RAM: minimal (no offload)
 
-## B5: SDPO Qwen3-14B + LoRA rank 32 (RUNNING)
+## B5: SDPO Qwen3-14B + LoRA rank 32 (RUNNING — stalled, LR too low)
 
 ### Hiccups
 8. **bitsandbytes optimizer_impl default** — CLI override changed `optimizer` to AdamW
@@ -158,8 +158,48 @@ python /home/azureuser/autoresearch-distillation/training/run_sdpo.py \
   actor_rollout_ref.actor.optim.optimizer_impl=torch.optim
 ```
 
-## Open Questions
-1. Will LoRA rank 32 have enough capacity for this task?
-2. All rewards were 0.0 in B4 — partly expected (LR warmup) but experiment_dispatch
-   time was also 0.0. Need to verify local evaluations actually run.
-3. May need higher LR for LoRA (1e-6 is conservative; typical LoRA LR is 1e-4 to 2e-4).
+### Step-by-step timing breakdown (step 1 → steady state)
+
+| Component | Step 1 | Steps 2-20 (avg) | Notes |
+|-----------|--------|-------------------|-------|
+| gen (rollout) | 702s | ~1600s | Bottleneck. Slowest trajectory dominates batch |
+| update_actor | 123s | ~140s | LoRA optimizer on GPU — 8.7x faster than CPU FT |
+| old_log_prob | 29s | ~31s | Ref log probs (base model, adapter disabled) |
+| adv | 1s | ~20s | Advantage computation |
+| **Total** | **855s (14m)** | **~1900s (32m)** | High variance: 14m to 47m |
+
+### Results after 20 steps (11.5 hours)
+
+- **Best DMC: 637,131** (first achieved at step 5, never improved after)
+- Baseline DMC for comparison: 28,103 (Opus single-shot) / 15,724 (Opus ICL)
+- `success_sample_fraction: 0.0` across all 20 steps — model never beat baseline
+- Rewards non-zero on ~60% of steps (max ~9.4M) but same cached values repeat
+- `rollout_probs_diff_mean: ~0.005` — policy only 0.5% different from base model
+- `env/novel` trending down — model increasingly hitting cached/duplicate results
+
+### Why it stalled
+
+1. **LR 1e-6 is far too low for LoRA.** Typical LoRA LR is 1e-4 to 2e-4. At 1e-6,
+   the adapter weights barely move — policy is <1% different from base after 20 steps.
+2. **SDPO teacher (EMA, rate 0.01) is essentially identical to actor.** The teacher's
+   reprompted responses are indistinguishable from the base model, providing no useful
+   distillation signal.
+3. **Rollout dominates step time.** Multi-turn agent loop with max 10 turns × 2 (user +
+   assistant) = 20 total turns. Slowest trajectory blocks the batch. One trajectory at
+   24K tokens / 20 turns takes 43 min while others finish in 10 min.
+4. **GPU memory oversubscription.** `max_memory_allocated: 113.8 GB` on 80GB A100.
+   CUDA UVM spilling to host RAM, slowing all GPU operations.
+
+### Key resource profile (LoRA)
+- GPU peak: 113.8 GB allocated (80GB VRAM + UVM spill to host)
+- GPU reserved: 114.3 GB
+- CPU RAM: 130 GB / 216 GB
+- update_actor: ~140s (was 1223s with full FT — 8.7x improvement)
+
+## Next Steps
+
+Need to address all four issues before restarting:
+1. Increase LR to ~5e-5 (50x current)
+2. Reduce max_user_turns/max_assistant_turns to limit rollout time
+3. Consider reducing max_response_length or gpu_memory_utilization
+4. May need to reduce batch size or model context to fit within 80GB VRAM

@@ -586,6 +586,22 @@ def discover_training_runs(config: dict) -> list[dict]:
         tags = r.tags or []
         box_info = box_map.get(r.id, {})
 
+        # Extract eval metrics from wandb summary (scaffold logs these)
+        summary = dict(r.summary) if r.summary else {}
+        eval_metrics: dict = {}
+        if "eval/pass_rate" in summary or "eval/avg_reward" in summary:
+            eval_metrics["pass_rate"] = summary.get("eval/pass_rate")
+            eval_metrics["avg_reward"] = summary.get("eval/avg_reward")
+            eval_metrics["scenarios_completed"] = summary.get("eval/scenarios_completed")
+            # Per-category pass rates
+            cat_rates = {}
+            for key, val in summary.items():
+                if key.startswith("eval/cat/") and key.endswith("_pass_rate"):
+                    cat_name = key.replace("eval/cat/", "").replace("_pass_rate", "")
+                    cat_rates[cat_name] = val
+            if cat_rates:
+                eval_metrics["by_category"] = cat_rates
+
         training_runs.append({
             "run_id": "wandb-%s" % r.id,
             "run_name": r.name,
@@ -599,9 +615,53 @@ def discover_training_runs(config: dict) -> list[dict]:
             "checkpoints": [],
             "gpu": box_info.get("gpu", ""),
             "config_summary": ", ".join(tags) if tags else "",
+            "eval_metrics": eval_metrics if eval_metrics else None,
         })
 
+    # 4. For runs with eval metrics, generate summary.json so they appear in the dashboard
+    for tr in training_runs:
+        em = tr.get("eval_metrics")
+        if not em or em.get("pass_rate") is None:
+            continue
+        _write_training_summary(tr, em)
+
     return training_runs
+
+
+def _write_training_summary(tr: dict, em: dict):
+    """Write a viewer summary.json for a training run that has eval metrics from wandb."""
+    run_id = tr["run_id"]
+    run_dir = VIEWER_DATA / "runs" / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    by_category = {}
+    for cat, rate in (em.get("by_category") or {}).items():
+        by_category[cat] = {
+            "n": 0,
+            "pass_rate": rate,
+            "avg_tool_score": em.get("avg_reward", 0) or 0,
+        }
+
+    n_scenarios = em.get("scenarios_completed") or 0
+    summary = {
+        "run_id": run_id,
+        "model_name": tr.get("run_name") or tr.get("model_name", run_id),
+        "training_step": None,
+        "timestamp": tr.get("started_at", ""),
+        "aggregates": {
+            "overall": {
+                "n": n_scenarios,
+                "pass_rate": em.get("pass_rate", 0) or 0,
+                "avg_tool_score": em.get("avg_reward", 0) or 0,
+            },
+            "by_category": by_category,
+            "failure_types": {},
+            "top_missing_tools": [],
+        },
+        "scenarios": [],
+    }
+
+    (run_dir / "summary.json").write_text(json.dumps(summary, indent=2))
 
 
 # ---------------------------------------------------------------------------
@@ -673,15 +733,8 @@ def main():
     # Training-only mode: just refresh wandb data in index.json
     if args.training_only:
         training_runs = discover_training_runs(config)
-        # Update only training_runs in existing index
-        index_path = VIEWER_DATA / "index.json"
-        if index_path.exists():
-            idx = json.loads(index_path.read_text())
-        else:
-            idx = {"runs": []}
-        idx["training_runs"] = training_runs
-        index_path.parent.mkdir(parents=True, exist_ok=True)
-        index_path.write_text(json.dumps(idx, indent=2))
+        # Regenerate full index (picks up new training run summaries too)
+        generate_index(training_runs)
         sys.exit(0)
 
     # Discover eval runs
