@@ -12,9 +12,10 @@ export async function GET() {
     execSync(`python3 ${scriptPath} --training-only`, {
       timeout: 30000,
       stdio: "pipe",
+      env: { ...process.env, PYTHONUNBUFFERED: "1" },
     });
-  } catch {
-    // Fall through to read whatever index exists
+  } catch (e) {
+    console.error("[/api/training] sync failed:", (e as { stderr?: Buffer })?.stderr?.toString() ?? e);
   }
 
   // Read the updated index and return just training_runs

@@ -100,6 +100,10 @@ class TaskConfig:
         t = raw.get("task", raw)  # support both top-level and nested
 
         workspace = WorkspaceConfig(**t["workspace"])
+        # Resolve source_dir relative to repo root so it works from any CWD
+        repo_root = Path(__file__).resolve().parent
+        if not Path(workspace.source_dir).is_absolute():
+            workspace.source_dir = str(repo_root / workspace.source_dir)
         execution = ExecutionConfig(**t["execution"])
         scoring = ScoringConfig(**t["scoring"])
         prompt = PromptConfig(**t["prompt"])

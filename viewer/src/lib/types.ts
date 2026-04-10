@@ -12,6 +12,13 @@ export interface RunEntry {
   status?: "active" | "complete";
 }
 
+export interface TrainingEvalMetrics {
+  pass_rate?: number | null;
+  avg_reward?: number | null;
+  scenarios_completed?: number | null;
+  by_category?: Record<string, number>;
+}
+
 export interface TrainingRun {
   run_id: string;
   run_name: string;
@@ -25,6 +32,7 @@ export interface TrainingRun {
   checkpoints: number[];
   gpu: string;
   config_summary?: string;
+  eval_metrics?: TrainingEvalMetrics | null;
 }
 
 export interface RunIndex {

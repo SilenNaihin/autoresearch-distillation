@@ -1,0 +1,18 @@
+tools:
+  - class_name: "lib.bash_tool.BashTool"
+    config:
+      type: native
+      command_timeout: 30
+      task_config: tasks/sparse_parity.yaml
+    tool_schema:
+      type: "function"
+      function:
+        name: "bash"
+        description: "Execute a bash command in the working directory containing solve.py"
+        parameters:
+          type: "object"
+          properties:
+            command:
+              type: "string"
+              description: "The bash command to execute"
+          required: ["command"]
