@@ -67,7 +67,7 @@ actor_rollout_ref:
     optim:
       optimizer: AdamW
       optimizer_impl: torch.optim
-      lr: 5e-5
+      lr: 3e-5
       lr_warmup_steps: 5
   rollout:
     name: vllm
