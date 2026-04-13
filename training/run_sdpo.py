@@ -104,8 +104,8 @@ def main(config):
     auto_set_device(config)
     # Force ppo_max_token_len_per_gpu to match max_model_len — Hydra structured
     # config silently ignores YAML/CLI overrides for this interpolated field.
-    from omegaconf import OmegaConf
-    with OmegaConf.read_write(config):
+    from omegaconf import OmegaConf, flag_override
+    with flag_override(config, "struct", False):
         config.actor_rollout_ref.actor.ppo_max_token_len_per_gpu = config.max_model_len
     task_runner_class = ray.remote(num_cpus=1)(PatchedTaskRunner)
     run_ppo(config, task_runner_class=task_runner_class)
