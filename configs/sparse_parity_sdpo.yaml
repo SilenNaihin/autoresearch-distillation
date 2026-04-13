@@ -6,14 +6,14 @@ defaults:
   - sdpo
   - _self_
 
-max_model_len: 32768
+max_model_len: 16384
 
 data:
   train_files: ["${vars.dir}/data/sparse_parity/train.parquet"]
   val_files: ["${vars.dir}/data/sparse_parity/test.parquet"]
   train_batch_size: 8
-  max_prompt_length: 8192
-  max_response_length: 24576
+  max_prompt_length: 4096
+  max_response_length: 12288
   apply_chat_template_kwargs: {"enable_thinking": true}
   return_raw_chat: True
   filter_overlong_prompts: True
@@ -46,7 +46,7 @@ actor_rollout_ref:
       loss_mode: sdpo
     self_distillation:
       teacher_update_rate: 0.01
-      max_reprompt_len: 8192
+      max_reprompt_len: 4096
       is_clip: 2.0
       alpha: 1.0
       distillation_topk: 20
